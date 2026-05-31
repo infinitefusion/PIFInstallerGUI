@@ -1,1 +1,1 @@
-# PIFInstallerGUI
+# PIFInstaller

@@ -1,0 +1,499 @@
+import tkinter as tk
+from tkinter import filedialog, scrolledtext
+import os
+import subprocess
+import threading
+import webbrowser
+
+from installer import run_install
+
+try:
+    from PIL import Image, ImageTk
+    PIL_AVAILABLE = True
+except ImportError:
+    PIL_AVAILABLE = False
+
+THEMES = {
+    "kanto": {
+        "accent":        "#ff4444",
+        "accent2":       "#8b1a1a",
+        "text":          "#ffe8e8",
+        "subtext":       "#cc9999",
+        "log_bg":        "#100505",
+        "log_fg":        "#ff9999",
+        "install_bg":    "#cc2222",
+        "install_hover": "#ff4444",
+        "panel_bg":      "#1a0808",
+    },
+    "hoenn": {
+        "accent":        "#00b4d8",
+        "accent2":       "#0077b6",
+        "text":          "#caf0f8",
+        "subtext":       "#90e0ef",
+        "log_bg":        "#050d15",
+        "log_fg":        "#48cae4",
+        "install_bg":    "#0096c7",
+        "install_hover": "#00b4d8",
+        "panel_bg":      "#050d15",
+    },
+}
+
+TITLES = {
+    "kanto": ("POKÉMON INFINITE FUSION 1", "KANTO"),
+    "hoenn": ("POKÉMON INFINITE FUSION 2", "HOENN"),
+}
+
+# (icon filename stem, label, url)
+SOCIAL_LINKS = [
+    ("discord",  "Discord",  "https://discord.gg/infinitefusion"),
+    ("wiki",     "Wiki",     "https://infinitefusion.fandom.com/wiki/Pok%C3%A9mon_Infinite_Fusion_Wiki"),
+    ("youtube",  "YouTube",  "https://www.youtube.com/@PokemonInfiniteFusion_Official"),
+    ("github",   "GitHub",   "https://github.com/infinitefusion/PIFInstaller"),
+    ("linktree", "Linktree", "https://linktr.ee/chardub513"),
+]
+
+ICON_SIZE       = 24          # px — icons are resized to this square
+SOCIAL_BAR_H    = 44          # px — height of the bar
+FONT_BTN        = ("Georgia", 12, "bold")
+FONT_INSTALL    = ("Georgia", 14, "bold")
+FONT_LOG        = ("Consolas", 9)
+FONT_LABEL      = ("Georgia", 8, "bold")
+FONT_SOCIAL     = ("Arial", 10, "bold")
+BTN_W, BTN_H    = 256, 199
+
+
+# ── PIL helpers ───────────────────────────────────────────────────────────────
+
+def _hex_to_rgb(hex_color):
+    h = hex_color.lstrip("#")
+    return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+
+def pil_load_native(path, bg_color="#000000"):
+    if not PIL_AVAILABLE:
+        return None, 0, 0
+    try:
+        img = Image.open(path).convert("RGBA")
+        bg = Image.new("RGBA", img.size, (*_hex_to_rgb(bg_color), 255))
+        bg.paste(img, mask=img.split()[3])
+        photo = ImageTk.PhotoImage(bg.convert("RGB"))
+        return photo, img.width, img.height
+    except Exception:
+        return None, 0, 0
+
+def pil_load_exact(path, w, h):
+    if not PIL_AVAILABLE or w < 1 or h < 1:
+        return None
+    try:
+        img = Image.open(path).convert("RGBA").resize((w, h), Image.LANCZOS)
+        return ImageTk.PhotoImage(img)
+    except Exception:
+        return None
+
+def pil_load_icon(path, size, bg_color="#000000"):
+    """Load a PNG icon, resize to `size`×`size`, composite onto bg_color, return PhotoImage."""
+    if not PIL_AVAILABLE:
+        return None
+    try:
+        img = Image.open(path).convert("RGBA").resize((size, size), Image.LANCZOS)
+        bg = Image.new("RGBA", (size, size), (*_hex_to_rgb(bg_color), 255))
+        bg.paste(img, mask=img.split()[3])
+        return ImageTk.PhotoImage(bg.convert("RGB"))
+    except Exception:
+        return None
+
+
+# ── ImageButton ───────────────────────────────────────────────────────────────
+
+class ImageButton(tk.Canvas):
+    """Canvas button that displays a native-size PNG with transparency."""
+
+    def __init__(self, parent, command, fallback_text="", **kwargs):
+        super().__init__(parent, width=BTN_W, height=BTN_H,
+                         highlightthickness=0, bd=0, cursor="hand2", **kwargs)
+        self._command    = command
+        self._fallback   = fallback_text
+        self._img_ref    = None
+        self._img_normal = None
+        self._img_sel    = None
+
+        self.bind("<Button-1>",        lambda _: self.configure(highlightthickness=2,
+                                                                highlightbackground="#ffffff"))
+        self.bind("<ButtonRelease-1>", self._on_release)
+
+    def set_paths(self, normal_path, selected_path):
+        self._img_normal = normal_path
+        self._img_sel    = selected_path
+
+    def refresh(self, bg_color, selected: bool):
+        self.configure(bg=bg_color)
+        self.delete("all")
+        path = (self._img_sel if selected else self._img_normal) or ""
+        if path and os.path.isfile(path):
+            img, w, h = pil_load_native(path, bg_color)
+            if img:
+                self._img_ref = img
+                self.configure(width=w, height=h)
+                self.create_image(0, 0, anchor="nw", image=img)
+                return
+        self._img_ref = None
+        self.configure(width=BTN_W, height=BTN_H)
+        self.create_text(BTN_W // 2, BTN_H // 2, text=self._fallback,
+                         fill="#ffffff", font=FONT_BTN, justify="center")
+
+    def _on_release(self, _):
+        self.configure(highlightthickness=0)
+        self._command()
+
+
+# ── SocialButton ──────────────────────────────────────────────────────────────
+
+class SocialButton(tk.Frame):
+    """Icon + label button for the social bar. Falls back to text-only if PIL unavailable."""
+
+    def __init__(self, parent, icon_path, label, url, bg, icon_size=ICON_SIZE, **kwargs):
+        super().__init__(parent, bg=bg, cursor="hand2", **kwargs)
+        self._url       = url
+        self._bg        = bg
+        self._icon_ref  = None          # keep reference so GC doesn't collect it
+
+        # Try to load icon image
+        icon_photo = pil_load_icon(icon_path, icon_size, bg)
+
+        if icon_photo:
+            self._icon_ref = icon_photo
+            self.icon_lbl = tk.Label(self, image=icon_photo, bg=bg, cursor="hand2")
+            self.icon_lbl.pack(side="left", padx=(6, 3))
+        else:
+            # No image — just a placeholder space so layout stays consistent
+            tk.Label(self, text="•", bg=bg, fg="#888888",
+                     font=FONT_SOCIAL, cursor="hand2").pack(side="left", padx=(6, 3))
+
+        self.text_lbl = tk.Label(self, text=label, bg=bg, fg="#aaaaaa",
+                                  font=FONT_SOCIAL, cursor="hand2")
+        self.text_lbl.pack(side="left", padx=(0, 6))
+
+        # Bind clicks and hover to frame + both child labels
+        for widget in (self, self.text_lbl) + ((self.icon_lbl,) if icon_photo else ()):
+            widget.bind("<Button-1>", self._on_click)
+            widget.bind("<Enter>",    self._on_enter)
+            widget.bind("<Leave>",    self._on_leave)
+
+    def _on_click(self, _):
+        webbrowser.open(self._url)
+
+    def set_accent(self, color: str):
+        """Update hover accent color (called when theme changes)."""
+        self._accent = color
+
+    def _on_enter(self, _):
+        accent = getattr(self, "_accent", "#00b4d8")
+        self.text_lbl.configure(fg=accent)
+
+    def _on_leave(self, _):
+        self.text_lbl.configure(fg="#aaaaaa")
+
+
+# ── Main app ──────────────────────────────────────────────────────────────────
+
+class InstallerApp(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title("Pokémon Infinite Fusion — Installer")
+        self.geometry("720x580")
+        self.minsize(640, 520)
+        self.resizable(True, True)
+        self.configure(bg="#000000")
+
+        self._theme_name   = "hoenn"
+        self._theme        = THEMES["hoenn"]
+        self._bg_ref       = None
+        self._log_visible  = False
+        self._status_text  = ""
+        self._install_path = None
+        self._res          = os.path.join(os.path.dirname(os.path.abspath(__file__)), "resources")
+        self._icons_dir    = os.path.join(self._res, "icons")
+
+        self._build_ui()
+        self._apply_theme("hoenn")
+        self.after(50, lambda: self._load_logo("hoenn"))
+
+    # ── Build ─────────────────────────────────────────────────────────────────
+
+    def _build_ui(self):
+        t = self._theme
+
+        # Background canvas
+        self.canvas_bg = tk.Canvas(self, highlightthickness=0, bd=0)
+        self.canvas_bg.place(relx=0, rely=0, relwidth=1, relheight=1)
+        tk.Widget.lower(self.canvas_bg)
+        self.bind("<Configure>", lambda e: self._load_bg(self._theme_name)
+                  if e.widget is self else None)
+
+        # Game select buttons
+        self.btn_kanto = ImageButton(self, command=lambda: self._select_game("kanto"),
+                                     fallback_text="Infinite Fusion 1\nKanto", bg=t["panel_bg"])
+        self.btn_kanto.set_paths(os.path.join(self._res, "btn_kanto.png"),
+                                 os.path.join(self._res, "btn_kanto_sel.png"))
+        self.btn_kanto.place(relx=0.5, rely=0.55, anchor="center", x=-150, y=-60)
+
+        self.btn_hoenn = ImageButton(self, command=lambda: self._select_game("hoenn"),
+                                     fallback_text="Infinite Fusion 2\nHoenn", bg=t["panel_bg"])
+        self.btn_hoenn.set_paths(os.path.join(self._res, "btn_hoenn.png"),
+                                 os.path.join(self._res, "btn_hoenn_sel.png"))
+        self.btn_hoenn.place(relx=0.5, rely=0.55, anchor="center", x=150, y=-60)
+
+        # Install location row
+        self.loc_row = tk.Frame(self, bg="#08111d", bd=0,
+                                highlightthickness=2,
+                                highlightbackground=t["accent2"])
+        self.loc_row.place(relx=0.05, rely=0.74, relwidth=0.90, anchor="w", height=48)
+
+        self.path_var = tk.StringVar(value=os.path.expanduser("~/Games/PokemonInfiniteFusion"))
+        self.path_entry = tk.Entry(self.loc_row, textvariable=self.path_var,
+                                   font=("Consolas", 12),
+                                   bg="#06101a", fg="#ffffff",
+                                   insertbackground="#ffffff",
+                                   relief="flat", bd=0, highlightthickness=0)
+        self.path_entry.pack(side="left", fill="both", expand=True, padx=(14, 10), pady=10)
+
+        # BROWSE
+        self.browse_btn = tk.Label(
+            self.loc_row, text="BROWSE",
+            font=("Arial", 10, "bold"),
+            bg="#1a3a5c", fg="#ffffff",
+            cursor="hand2", padx=18, pady=6)
+        self.browse_btn.pack(side="right", padx=8, pady=6)
+        self.browse_btn.bind("<Button-1>", lambda _: self._browse())
+        self.browse_btn.bind("<Enter>",    lambda _: self.browse_btn.configure(bg=self._theme["accent"]))
+        self.browse_btn.bind("<Leave>",    lambda _: self.browse_btn.configure(bg="#1a3a5c"))
+
+        # INSTALL / UPDATE
+        self.install_btn = tk.Label(
+            self, text="INSTALL / UPDATE",
+            font=FONT_INSTALL,
+            bg=t["install_bg"], fg="#ffffff",
+            cursor="hand2", pady=12)
+        self.install_btn.place(relx=0.04, rely=0.84, relwidth=0.92, anchor="w")
+        self.install_btn.bind("<Button-1>", lambda _: self._start_install())
+
+        # Status label (hidden until install)
+        self.status_label = tk.Label(
+            self, text="Installing the game...  This may take a few minutes.",
+            font=("Georgia", 24),
+            fg="#d7f4ff", bg=t["panel_bg"],
+            wraplength=640, justify="center")
+
+        # Log (hidden until install)
+        self.log_box = scrolledtext.ScrolledText(
+            self, font=FONT_LOG,
+            bg=t["log_bg"], fg=t["log_fg"],
+            insertbackground=t["log_fg"],
+            relief="flat", bd=0,
+            highlightthickness=2,
+            highlightbackground=t["accent2"],
+            wrap="word", state="disabled")
+
+        # OPEN FOLDER
+        self.open_folder_btn = tk.Label(
+            self, text="OPEN THE GAME'S FOLDER",
+            font=FONT_INSTALL,
+            bg="#1a5c1a", fg="#ffffff",
+            cursor="hand2", pady=12)
+        self.open_folder_btn.bind("<Button-1>", lambda _: self._open_install_folder())
+        self.open_folder_btn.bind("<Enter>",    lambda _: self.open_folder_btn.configure(bg="#2e7d2e"))
+        self.open_folder_btn.bind("<Leave>",    lambda _: self.open_folder_btn.configure(bg="#1a5c1a"))
+
+        # Social links bar
+        self._build_social_bar()
+
+    def _build_social_bar(self):
+        """Pinned-to-bottom row of icon+label social link buttons."""
+        self.social_bar = tk.Frame(self, bg="#000000", bd=0)
+        self.social_bar.place(relx=0, rely=1.0, relwidth=1.0, anchor="sw", height=SOCIAL_BAR_H)
+
+        # Thin separator line at the top of the bar
+        sep = tk.Frame(self.social_bar, bg="#222222", height=1)
+        sep.pack(side="top", fill="x")
+
+        inner = tk.Frame(self.social_bar, bg="#000000")
+        inner.pack(side="top", fill="both", expand=True)
+
+        self._social_btns = []
+        for stem, label, url in SOCIAL_LINKS:
+            icon_path = os.path.join(self._icons_dir, f"{stem}.png")
+            btn = SocialButton(inner, icon_path=icon_path, label=label, url=url, bg="#000000")
+            btn.pack(side="left", padx=2, pady=4)
+            btn.set_accent(self._theme["accent"])
+            self._social_btns.append(btn)
+
+    # ── Theme ─────────────────────────────────────────────────────────────────
+
+    def _apply_theme(self, name: str):
+        t = THEMES[name]
+        self._theme_name = name
+        self._theme      = t
+
+        self._load_bg(name)
+        self._load_logo(name)
+        self.btn_kanto.refresh(t["panel_bg"], name == "kanto")
+        self.btn_hoenn.refresh(t["panel_bg"], name == "hoenn")
+
+        self.loc_row.configure(highlightbackground=t["accent2"])
+        self.path_entry.configure(fg=t["text"], insertbackground=t["accent"])
+        self.browse_btn.configure(activebackground=t["accent"])
+        self.install_btn.configure(bg=t["install_bg"], fg="#ffffff")
+        self.install_btn.bind("<Enter>", lambda _: self.install_btn.configure(bg=t["install_hover"]))
+        self.install_btn.bind("<Leave>", lambda _: self.install_btn.configure(bg=t["install_bg"]))
+        self.browse_btn.configure(fg="#ffffff")
+        self.log_box.configure(bg=t["log_bg"], fg=t["log_fg"],
+                               insertbackground=t["log_fg"],
+                               highlightbackground=t["accent2"])
+
+        # Update accent color on social buttons so hover matches theme
+        for btn in getattr(self, "_social_btns", []):
+            btn.set_accent(t["accent"])
+
+    def _load_bg(self, name: str):
+        self.canvas_bg.delete("bg")
+        w = self.winfo_width() or 720
+        h = self.winfo_height() or 580
+        fname = {"kanto": "bg_kanto.png", "hoenn": "bg_hoenn.png"}.get(name, "")
+        if fname:
+            img = pil_load_exact(os.path.join(self._res, fname), w, h)
+            if img:
+                self._bg_ref = img
+                self.canvas_bg.create_image(0, 0, anchor="nw", image=img, tags="bg")
+                self.canvas_bg.tag_lower("bg")
+                return
+        self._bg_ref = None
+        self.canvas_bg.configure(bg=self._theme["log_bg"])
+
+    def _load_logo(self, name: str):
+        self.canvas_bg.delete("logo")
+        main, sub = TITLES.get(name, ("POKÉMON INFINITE FUSION", ""))
+        w = max(self.winfo_width(), 720)
+        cx = w // 2
+        t = self._theme
+
+        def outlined(x, y, text, font, fill, size=2):
+            for dx in (-size, 0, size):
+                for dy in (-size, 0, size):
+                    if dx or dy:
+                        self.canvas_bg.create_text(x + dx, y + dy, text=text,
+                                                   font=font, fill="#000000",
+                                                   anchor="n", tags="logo")
+            self.canvas_bg.create_text(x, y, text=text, font=font, fill=fill,
+                                       anchor="n", tags="logo")
+
+        outlined(cx, 18, main, ("Arial", 36, "bold"), "#ffffff")
+        outlined(cx, 62, sub, ("Impact", 48, "bold"), t["accent"], size=4)
+
+        if not self._log_visible:
+            outlined(cx, 370, "Install location: ", ("Arial", 16, "bold"), "#d7f4ff")
+        elif self._status_text:
+            self._draw_status_text(self._status_text)
+
+    # ── Interaction ───────────────────────────────────────────────────────────
+
+    def _select_game(self, game: str):
+        self._apply_theme(game)
+
+    def _browse(self):
+        folder = filedialog.askdirectory(title="Select install folder",
+                                         initialdir=self.path_var.get())
+        if folder:
+            self.path_var.set(folder)
+            self._log(f"Install path set to: {folder}")
+
+    def _log(self, msg: str, replace_last=False):
+        self.log_box.configure(state="normal")
+        if replace_last:
+            try:
+                self.log_box.delete("end-2l linestart", "end-1l")
+            except tk.TclError:
+                pass
+        self.log_box.insert("end", f"» {msg}\n")
+        self.log_box.see("end")
+        self.log_box.configure(state="disabled")
+
+    def _open_install_folder(self):
+        if not self._install_path or not os.path.isdir(self._install_path):
+            return
+        import sys
+        if sys.platform == "win32":
+            os.startfile(self._install_path)
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", self._install_path])
+        else:
+            subprocess.Popen(["xdg-open", self._install_path])
+
+    def _start_install(self):
+        path = self.path_var.get().strip()
+        if not path:
+            self._show_log_panel()
+            self._log("Please set an install location.")
+            return
+
+        self._install_path = path
+
+        # Hide picker UI and social bar, show full-height log
+        for w in (self.btn_kanto, self.btn_hoenn, self.loc_row, self.install_btn):
+            w.place_forget()
+        self.social_bar.place_forget()          # ← hide social icons during install
+
+        self._load_logo(self._theme_name)
+        self._show_log_panel()
+
+        self._log(f"Starting install to: {path}")
+
+        def log_fn(msg, replace_last=False):
+            self.after(0, lambda: self._log(msg, replace_last))
+
+        def done_fn(success, msg):
+            def finish():
+                self._log(msg)
+                self._draw_status_text(msg)
+                if success:
+                    folder = "InfiniteFusion2" if self._theme_name == "hoenn" else "InfiniteFusion"
+                    self._install_path = os.path.join(path, folder)
+                    self.open_folder_btn.place(relx=0.04, rely=0.93, relwidth=0.92, anchor="w")
+                else:
+                    self.install_btn.configure(text="INSTALL / UPDATE")
+                    self.install_btn.place(relx=0.04, rely=0.93, relwidth=0.92, anchor="w")
+            self.after(0, finish)
+
+        threading.Thread(target=run_install,
+                         args=(self._theme_name, path, log_fn, done_fn),
+                         daemon=True).start()
+
+    def _show_log_panel(self):
+        if self._log_visible:
+            return
+        self._log_visible = True
+        self.geometry("720x580")
+        self.minsize(640, 520)
+        self._draw_status_text("Installing…  This will probably take a few minutes.\nPlease be patient.")
+        self.log_box.place(relx=0.04, rely=0.36, relwidth=0.92, anchor="nw", height=300)
+
+    def _draw_status_text(self, text: str):
+        self._status_text = text
+        self.canvas_bg.delete("status")
+        w = max(self.winfo_width(), 720)
+        def outlined(x, y, text, font, fill, size=2):
+            for dx in (-size, 0, size):
+                for dy in (-size, 0, size):
+                    if dx or dy:
+                        self.canvas_bg.create_text(x+dx, y+dy, text=text,
+                                                   font=font, fill="#000000",
+                                                   anchor="n", tags="status")
+            self.canvas_bg.create_text(x, y, text=text, font=font, fill=fill,
+                                       anchor="n", tags="status")
+        outlined(w // 2, 136, text, ("Georgia", 18), "#ffffff")
+
+    def _clear_status_text(self):
+        self._status_text = ""
+        self.canvas_bg.delete("status")
+
+
+if __name__ == "__main__":
+    InstallerApp().mainloop()
