@@ -48,7 +48,7 @@ SOCIAL_LINKS = [
     ("discord",  "Discord",  "https://discord.gg/infinitefusion"),
     ("wiki",     "Wiki",     "https://infinitefusion.fandom.com/wiki/Pok%C3%A9mon_Infinite_Fusion_Wiki"),
     ("youtube",  "YouTube",  "https://www.youtube.com/@PokemonInfiniteFusion_Official"),
-    ("github",   "GitHub",   "https://github.com/infinitefusion/PIFInstaller"),
+    ("github",   "GitHub",   "https://github.com/infinitefusion/PIFInstallerGUI"),
     ("linktree", "Linktree", "https://linktr.ee/chardub513"),
 ]
 
