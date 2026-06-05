@@ -44,7 +44,7 @@ GAMES = {
         "label":    "Pokémon Infinite Fusion 2",
         "subtitle": "Hoenn",
         "repo":     "https://github.com/infinitefusion/infinitefusion-hoenn.git",
-        "branch":   None,
+        "branch":   "releases",
         "folder":   "InfiniteFusion2",
     },
 }
@@ -139,13 +139,12 @@ def _resolve_git(log_fn, done_fn) -> str | None:
 # ── Install logic ─────────────────────────────────────────────────────────────
 
 def run_install(game_key: str, install_dir: str, log_fn, done_fn):
-    """
-    Clone or update the chosen game.  Called on a background thread.
-    log_fn(str)           — stream progress lines to the UI
-    done_fn(bool, str)    — called exactly once when finished
-    """
     game   = GAMES[game_key]
-    target = Path(install_dir) / game["folder"]
+    install_path = Path(install_dir)
+    if install_path.name == game["folder"]:
+        target = install_path
+    else:
+        target = install_path / game["folder"]
 
     # Resolve git, downloading MinGit if necessary
     git_exe = _resolve_git(log_fn, done_fn)
@@ -175,7 +174,7 @@ def run_install(game_key: str, install_dir: str, log_fn, done_fn):
         return proc.returncode
 
     try:
-        if target.exists() and (target / ".git").exists():
+        if is_existing_folder(target,game):
             log_fn(f"Found existing repo at {target} — pulling latest…")
             rc = run([git_exe, "-C", str(target), "pull", "--recurse-submodules"])
             was_update = True
@@ -197,3 +196,30 @@ def run_install(game_key: str, install_dir: str, log_fn, done_fn):
 
     except Exception as exc:
         done_fn(False, f"Error: {exc}")
+
+
+def verify_game_name(folder_path, game):
+    ini_path = folder_path / "Game.ini"
+    if not ini_path.is_file():
+        return False
+
+    expected_titles = {
+        "InfiniteFusion":  "infinitefusion",
+        "InfiniteFusion2": "infinitefusion-hoenn",
+    }
+    expected = expected_titles.get(game["folder"])
+    if expected is None:
+        return False
+
+    import configparser
+    config = configparser.ConfigParser()
+    config.read(ini_path, encoding="utf-8")
+    return config.get("Game", "Title", fallback="").strip() == expected
+
+
+def is_existing_folder(folder_path, game):
+    return (
+        folder_path.exists()
+        and (folder_path / ".git").exists()
+        and verify_game_name(folder_path, game)
+    )

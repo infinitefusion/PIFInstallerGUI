@@ -459,11 +459,15 @@ class InstallerApp(tk.Tk):
                 self._draw_status_text(msg)
                 if success:
                     folder = "InfiniteFusion2" if self._theme_name == "hoenn" else "InfiniteFusion"
-                    self._install_path = os.path.join(path, folder)
+                    if os.path.basename(path) == folder:
+                        self._install_path = path
+                    else:
+                        self._install_path = os.path.join(path, folder)
                     self.open_folder_btn.place(relx=0.04, rely=0.93, relwidth=0.92, anchor="w")
                 else:
                     self.install_btn.configure(text="INSTALL / UPDATE")
                     self.install_btn.place(relx=0.04, rely=0.93, relwidth=0.92, anchor="w")
+
             self.after(0, finish)
 
         threading.Thread(target=run_install,
