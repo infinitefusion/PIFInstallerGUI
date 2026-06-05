@@ -52,13 +52,17 @@ SOCIAL_LINKS = [
     ("linktree", "Linktree", "https://linktr.ee/chardub513"),
 ]
 
+POWER_CLEAR_AVAILABLE = False #Todo
+
 ICON_SIZE       = 24          # px — icons are resized to this square
 SOCIAL_BAR_H    = 44          # px — height of the bar
-FONT_BTN        = ("Georgia", 12, "bold")
-FONT_INSTALL    = ("Georgia", 14, "bold")
-FONT_LOG        = ("Consolas", 9)
-FONT_LABEL      = ("Georgia", 8, "bold")
-FONT_SOCIAL     = ("Arial", 10, "bold")
+_PC = "Power Clear" if POWER_CLEAR_AVAILABLE else "Georgia"
+
+FONT_BTN     = (_PC, 12, "bold")
+FONT_INSTALL = (_PC, 14, "bold")
+FONT_LOG     = ("Consolas", 9)          # keep monospace for logs
+FONT_LABEL   = (_PC, 8, "bold")
+FONT_SOCIAL  = (_PC, 10, "bold")
 BTN_W, BTN_H    = 256, 199
 
 

@@ -29,6 +29,7 @@ _SCRIPT_DIR  = Path(os.path.dirname(os.path.abspath(__file__)))
 _VENDOR_DIR  = _SCRIPT_DIR / "vendor"
 _GIT_DIR     = _VENDOR_DIR / "git"
 _GIT_EXE     = _GIT_DIR / "cmd" / "git.exe"   # MinGit layout on Windows
+_GIT_INSTALL_URL = "https://git-scm.com/install/"
 
 # ── Game definitions ──────────────────────────────────────────────────────────
 GAMES = {
@@ -130,7 +131,7 @@ def _resolve_git(log_fn, done_fn) -> str | None:
         return git
 
     except Exception as exc:
-        done_fn(False, f"Failed to download MinGit: {exc}")
+        done_fn(False, f"Failed to download MinGit: {exc}\nPlease try downloading installing git manually instead.\n{_GIT_INSTALL_URL}")
         zip_path.unlink(missing_ok=True)
         return None
 
