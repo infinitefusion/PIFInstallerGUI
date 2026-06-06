@@ -170,8 +170,14 @@ def run_install(game_key: str, install_dir: str, log_fn, done_fn):
             bufsize=1,
             env=env,
         )
+        last_prefix = None
         for line in proc.stdout:
-            log_fn(line.rstrip())
+            line = line.rstrip()
+            colon_pos = line.find(":")
+            prefix = line[:colon_pos].strip() if colon_pos != -1 else None
+            replace = (prefix is not None and prefix == last_prefix)
+            log_fn(line, replace)
+            last_prefix = prefix
         proc.wait()
         return proc.returncode
 
