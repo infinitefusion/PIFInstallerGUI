@@ -145,7 +145,9 @@ def run_install(game_key: str, install_dir: str, log_fn, done_fn):
         target = install_path
     else:
         target = install_path / game["folder"]
-
+    game_exe_name = "Game.exe"
+    if game_key == "hoenn":
+        game_exe_name = "InfiniteFusion.exe"
     # Resolve git, downloading MinGit if necessary
     git_exe = _resolve_git(log_fn, done_fn)
     if git_exe is None:
@@ -189,7 +191,7 @@ def run_install(game_key: str, install_dir: str, log_fn, done_fn):
             was_update = False
         if rc == 0:
             action = "updated" if was_update else "installed"
-            done_fn(True, f"Successfully {action}!\nLaunch the game with Game.exe")
+            done_fn(True, f"Successfully {action}!\nLaunch the game with {game_exe_name}")
         else:
             action = "updating" if was_update else "installing"
             done_fn(False, f"Could not finish {action}.\nCheck the logs for details.")
