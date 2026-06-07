@@ -43,7 +43,7 @@ GAMES = {
     "hoenn": {
         "label":    "Pokémon Infinite Fusion 2",
         "subtitle": "Hoenn",
-        "repo":     "https://github.com/infinitefusion/infinitefusion-hoenn.git",
+        "repo":     "https://github.com/infinitefusion/infinitefusion-hoenn-public.git",
         "branch":   "releases",
         "folder":   "InfiniteFusion2",
     },
@@ -147,7 +147,7 @@ def run_install(game_key: str, install_dir: str, log_fn, done_fn):
         target = install_path / game["folder"]
     game_exe_name = "Game.exe"
     if game_key == "hoenn":
-        game_exe_name = "InfiniteFusion.exe"
+        game_exe_name = "InfiniteFusion2.exe"
     # Resolve git, downloading MinGit if necessary
     git_exe = _resolve_git(log_fn, done_fn)
     if git_exe is None:
