@@ -5,7 +5,7 @@ a = Analysis(
     ['installer_ui.py'],
     pathex=[],
     binaries=[],
-    datas=[('/Users/chardub/Documents/infinitefusion/PIFInstallerGUI/resources', 'resources')],
+    datas=[('C:\\Users\\Constellio\\Desktop\\PIF\\PIFInstallerGUI\\resources', 'resources')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -35,11 +35,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['/Users/chardub/Documents/infinitefusion/PIFInstallerGUI/resources/icon.icns'],
-)
-app = BUNDLE(
-    exe,
-    name='PokemonInfiniteFusion-Installer.app',
-    icon='/Users/chardub/Documents/infinitefusion/PIFInstallerGUI/resources/icon.icns',
-    bundle_identifier=None,
+    icon=['C:\\Users\\Constellio\\Desktop\\PIF\\PIFInstallerGUI\\resources\\icon.ico'],
 )
