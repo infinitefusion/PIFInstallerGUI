@@ -207,8 +207,8 @@ class InstallerApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Pokémon Infinite Fusion — Installer")
-        self.geometry("720x580")
-        self.minsize(640, 520)
+        self.geometry("800x580")
+        self.minsize(720, 640)
         self.resizable(True, True)
         self.configure(bg="#000000")
 
@@ -223,6 +223,7 @@ class InstallerApp(tk.Tk):
 
         self._build_ui()
         self._apply_theme("hoenn")
+        self.after(100, self._show_persistent_buttons)
         self.after(50, lambda: self._load_logo("hoenn"))
 
     # ── Build ─────────────────────────────────────────────────────────────────
@@ -242,19 +243,19 @@ class InstallerApp(tk.Tk):
                                      fallback_text="Infinite Fusion 1\nKanto", bg=t["panel_bg"])
         self.btn_kanto.set_paths(os.path.join(self._res, "btn_kanto.png"),
                                  os.path.join(self._res, "btn_kanto_sel.png"))
-        self.btn_kanto.place(relx=0.5, rely=0.55, anchor="center", x=-150, y=-60)
+        self.btn_kanto.place(relx=0.5, rely=0.44, anchor="center", x=-150, y=-60)
 
         self.btn_hoenn = ImageButton(self, command=lambda: self._select_game("hoenn"),
                                      fallback_text="Infinite Fusion 2\nHoenn", bg=t["panel_bg"])
         self.btn_hoenn.set_paths(os.path.join(self._res, "btn_hoenn.png"),
                                  os.path.join(self._res, "btn_hoenn_sel.png"))
-        self.btn_hoenn.place(relx=0.5, rely=0.55, anchor="center", x=150, y=-60)
+        self.btn_hoenn.place(relx=0.5, rely=0.44, anchor="center", x=150, y=-60)
 
         # Install location row
         self.loc_row = tk.Frame(self, bg="#08111d", bd=0,
                                 highlightthickness=2,
                                 highlightbackground=t["accent2"])
-        self.loc_row.place(relx=0.05, rely=0.74, relwidth=0.90, anchor="w", height=48)
+        self.loc_row.place(relx=0.05, rely=0.62, relwidth=0.90, anchor="w", height=48)
 
         cfg = load_config()
         saved_path = cfg.get(f"last_install_path_{self._theme_name}", os.path.expanduser(DEFAULT_PATH))
@@ -279,13 +280,23 @@ class InstallerApp(tk.Tk):
         self.browse_btn.bind("<Enter>",    lambda _: self.browse_btn.configure(bg=self._theme["accent"]))
         self.browse_btn.bind("<Leave>",    lambda _: self.browse_btn.configure(bg="#1a3a5c"))
 
+        # LAUNCH GAME
+        self.launch_btn = tk.Label(
+            self, text="LAUNCH GAME",
+            font=FONT_INSTALL,
+            bg="#1a5c1a", fg="#ffffff",
+            cursor="hand2", pady=12)
+        self.launch_btn.bind("<Button-1>", lambda _: self._launch_game())
+        self.launch_btn.bind("<Enter>", lambda _: self.launch_btn.configure(bg="#2e7d2e"))
+        self.launch_btn.bind("<Leave>", lambda _: self.launch_btn.configure(bg="#1a5c1a"))
+
         # INSTALL / UPDATE
         self.install_btn = tk.Label(
             self, text="INSTALL / UPDATE",
             font=FONT_INSTALL,
             bg=t["install_bg"], fg="#ffffff",
             cursor="hand2", pady=12)
-        self.install_btn.place(relx=0.04, rely=0.84, relwidth=0.92, anchor="w")
+        self.install_btn.place(relx=0.04, rely=0.88, relwidth=0.92, anchor="w")
         self.install_btn.bind("<Button-1>", lambda _: self._start_install())
 
         # Status label (hidden until install)
@@ -309,11 +320,11 @@ class InstallerApp(tk.Tk):
         self.open_folder_btn = tk.Label(
             self, text="OPEN THE GAME'S FOLDER",
             font=FONT_INSTALL,
-            bg="#1a5c1a", fg="#ffffff",
+            bg="#b8860b", fg="#ffffff",
             cursor="hand2", pady=12)
         self.open_folder_btn.bind("<Button-1>", lambda _: self._open_install_folder())
-        self.open_folder_btn.bind("<Enter>",    lambda _: self.open_folder_btn.configure(bg="#2e7d2e"))
-        self.open_folder_btn.bind("<Leave>",    lambda _: self.open_folder_btn.configure(bg="#1a5c1a"))
+        self.open_folder_btn.bind("<Enter>", lambda _: self.open_folder_btn.configure(bg="#daa520"))
+        self.open_folder_btn.bind("<Leave>", lambda _: self.open_folder_btn.configure(bg="#b8860b"))
 
         # Social links bar
         self._build_social_bar()
@@ -401,17 +412,34 @@ class InstallerApp(tk.Tk):
         outlined(cx, 62, sub, ("Impact", 48, "bold"), t["accent"], size=4)
 
         if not self._log_visible:
-            outlined(cx, 370, "Install location: ", ("Arial", 16, "bold"), "#d7f4ff")
+            outlined(cx, 340, "Install location: ", ("Arial", 16, "bold"), "#d7f4ff")
         elif self._status_text:
             self._draw_status_text(self._status_text)
 
-    # ── Interaction ───────────────────────────────────────────────────────────
+    def _show_persistent_buttons(self):
+        """Show launch + open folder buttons if the game exists at the current path."""
+        from installer import GAMES, is_existing_folder
+        game = GAMES[self._theme_name]
+        path = self._resolve_install_path(self.path_var.get().strip())
+        if is_existing_folder(path, game):
+            self.launch_btn.place(relx=0.04, rely=0.72, relwidth=0.92, anchor="w")
+            self.open_folder_btn.place(relx=0.04, rely=0.80, relwidth=0.92, anchor="w")
+            self.install_btn.configure(pady=12)
+            self.install_btn.place(relx=0.04, rely=0.88, relwidth=0.92, anchor="w")
 
+        else:
+            self.launch_btn.place_forget()
+            self.open_folder_btn.place_forget()
+            self.install_btn.configure(pady=36)
+            self.install_btn.place(relx=0.04, rely=0.80, relwidth=0.92, anchor="w")
+
+    # ── Interaction ───────────────────────────────────────────────────────────
     def _select_game(self, game: str):
         self._apply_theme(game)
         cfg = load_config()
         self.path_var.set(cfg.get(f"last_install_path_{game}", os.path.expanduser(DEFAULT_PATH)))
-        self._refresh_install_btn()  # ← add
+        self._show_persistent_buttons()
+        self._refresh_install_btn()
 
     def _browse(self):
         folder = filedialog.askdirectory(title="Select install folder",
@@ -419,7 +447,7 @@ class InstallerApp(tk.Tk):
         if folder:
             self.path_var.set(folder)
             self._log(f"Install path set to: {folder}")
-            self._refresh_install_btn()  # ← add
+            self._refresh_install_btn()
 
     def _refresh_install_btn(self):
         from installer import GAMES, is_existing_folder
@@ -427,7 +455,7 @@ class InstallerApp(tk.Tk):
         path = self._resolve_install_path(self.path_var.get().strip())
         label = "UPDATE" if is_existing_folder(path, game) else "INSTALL"
         self.install_btn.configure(text=label)
-
+        self._show_persistent_buttons()
     def _log(self, msg: str, replace_last=False):
         self.log_box.configure(state="normal")
         if replace_last:
@@ -440,15 +468,22 @@ class InstallerApp(tk.Tk):
         self.log_box.configure(state="disabled")
 
     def _open_install_folder(self):
-        if not self._install_path or not os.path.isdir(self._install_path):
+        raw_path = self.path_var.get().strip()
+        if not raw_path:
+            self._log("No path specified.")
+            return
+        resolved_path = self._resolve_install_path(raw_path)
+        if not os.path.isdir(resolved_path):
+            self._log(f"Folder does not exist: {resolved_path}")
             return
         import sys
+        path_str = str(resolved_path)
         if sys.platform == "win32":
-            os.startfile(self._install_path)
+            os.startfile(path_str)
         elif sys.platform == "darwin":
-            subprocess.Popen(["open", self._install_path])
+            subprocess.Popen(["open", path_str])
         else:
-            subprocess.Popen(["xdg-open", self._install_path])
+            subprocess.Popen(["xdg-open", path_str])
 
     def _game_folder_name(self) -> str:
         from installer import GAMES
@@ -460,6 +495,21 @@ class InstallerApp(tk.Tk):
         if path.name != self._game_folder_name():
             path = path / self._game_folder_name()
         return path
+
+    def _launch_game(self):
+        from installer import GAMES
+        exe_name = GAMES[self._theme_name].get("exe", "Game.exe")
+        exe_path = self._resolve_install_path(self.path_var.get().strip()) / exe_name
+        if not exe_path.is_file():
+            self._log(f"Could not find {exe_name} in the game folder.")
+            return
+        import sys
+        if sys.platform == "win32":
+            os.startfile(exe_path)
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", str(exe_path)])
+        else:
+            subprocess.Popen([str(exe_path)])
 
     def _start_install(self):
         path = self.path_var.get().strip()
@@ -494,11 +544,10 @@ class InstallerApp(tk.Tk):
                         self._install_path = path
                     else:
                         self._install_path = os.path.join(path, folder)
-                    self.open_folder_btn.place(relx=0.04, rely=0.93, relwidth=0.92, anchor="w")
+                    self._show_persistent_buttons()
                 else:
                     self.install_btn.configure(text="INSTALL")
-                    self.install_btn.place(relx=0.04, rely=0.93, relwidth=0.92, anchor="w")
-
+                    self.install_btn.place(relx=0.04, rely=0.88, relwidth=0.92, anchor="w")
             self.after(0, finish)
 
         threading.Thread(target=run_install,
@@ -509,8 +558,8 @@ class InstallerApp(tk.Tk):
         if self._log_visible:
             return
         self._log_visible = True
-        self.geometry("720x580")
-        self.minsize(640, 520)
+        self.geometry("720x640")
+        self.minsize(720, 580)
         self._draw_status_text("Installing…  This will probably take a few minutes.\nPlease be patient.")
         self.log_box.place(relx=0.04, rely=0.36, relwidth=0.92, anchor="nw", height=300)
 

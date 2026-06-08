@@ -39,6 +39,7 @@ GAMES = {
         "repo":     "https://github.com/infinitefusion/infinitefusion-e18.git",
         "branch":   "releases",
         "folder":   "InfiniteFusion",
+        "exe": "Game.exe",
     },
     "hoenn": {
         "label":    "Pokémon Infinite Fusion 2",
@@ -46,6 +47,7 @@ GAMES = {
         "repo":     "https://github.com/infinitefusion/infinitefusion-hoenn-public.git",
         "branch":   "releases",
         "folder":   "InfiniteFusion2",
+        "exe": "InfiniteFusion2.exe",
     },
 }
 
