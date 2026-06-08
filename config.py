@@ -5,7 +5,7 @@ from pathlib import Path
 FOLDER_NAME = "infinitefusion-common"
 def _config_path() -> Path:
     base = Path(os.environ.get("APPDATA", Path.home()))
-    return base / FOLDER_NAME / "config.json"
+    return base / FOLDER_NAME / "launcher_config.json"
 
 def load_config() -> dict:
     try:
