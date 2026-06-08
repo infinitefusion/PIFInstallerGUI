@@ -113,8 +113,6 @@ def pil_load_icon(path, size, bg_color="#000000"):
 # ── ImageButton ───────────────────────────────────────────────────────────────
 
 class ImageButton(tk.Canvas):
-    """Canvas button that displays a native-size PNG with transparency."""
-
     def __init__(self, parent, command, fallback_text="", **kwargs):
         super().__init__(parent, width=BTN_W, height=BTN_H,
                          highlightthickness=0, bd=0, cursor="hand2", **kwargs)
@@ -123,21 +121,30 @@ class ImageButton(tk.Canvas):
         self._img_ref    = None
         self._img_normal = None
         self._img_sel    = None
+        self._selected   = False        # ← track state
+        self._bg_color   = "#000000"    # ← remember bg for re-render
 
         self.bind("<Button-1>",        lambda _: self.configure(highlightthickness=2,
                                                                 highlightbackground="#ffffff"))
         self.bind("<ButtonRelease-1>", self._on_release)
+        self.bind("<Enter>", lambda _: self._redraw(True))
+        self.bind("<Leave>", lambda _: self._redraw(self._selected))
 
     def set_paths(self, normal_path, selected_path):
         self._img_normal = normal_path
         self._img_sel    = selected_path
 
     def refresh(self, bg_color, selected: bool):
-        self.configure(bg=bg_color)
+        self._bg_color = bg_color
+        self._selected = selected
+        self._redraw(selected)
+
+    def _redraw(self, use_sel: bool):
+        self.configure(bg=self._bg_color)
         self.delete("all")
-        path = (self._img_sel if selected else self._img_normal) or ""
+        path = (self._img_sel if use_sel else self._img_normal) or ""
         if path and os.path.isfile(path):
-            img, w, h = pil_load_native(path, bg_color)
+            img, w, h = pil_load_native(path, self._bg_color)
             if img:
                 self._img_ref = img
                 self.configure(width=w, height=h)
@@ -183,8 +190,6 @@ class SocialButton(tk.Frame):
         # Bind clicks and hover to frame + both child labels
         for widget in (self, self.text_lbl) + ((self.icon_lbl,) if icon_photo else ()):
             widget.bind("<Button-1>", self._on_click)
-            widget.bind("<Enter>",    self._on_enter)
-            widget.bind("<Leave>",    self._on_leave)
 
     def _on_click(self, _):
         webbrowser.open(self._url)
@@ -208,7 +213,7 @@ class InstallerApp(tk.Tk):
         super().__init__()
         self.title("Pokémon Infinite Fusion — Installer")
         self.geometry("800x580")
-        self.minsize(720, 640)
+        self.minsize(900, 720)
         self.resizable(True, True)
         self.configure(bg="#000000")
 
@@ -225,6 +230,8 @@ class InstallerApp(tk.Tk):
         self._apply_theme("hoenn")
         self.after(100, self._show_persistent_buttons)
         self.after(50, lambda: self._load_logo("hoenn"))
+
+
 
     # ── Build ─────────────────────────────────────────────────────────────────
 
@@ -255,7 +262,7 @@ class InstallerApp(tk.Tk):
         self.loc_row = tk.Frame(self, bg="#08111d", bd=0,
                                 highlightthickness=2,
                                 highlightbackground=t["accent2"])
-        self.loc_row.place(relx=0.05, rely=0.62, relwidth=0.90, anchor="w", height=48)
+        self.loc_row.place(relx=0.05, rely=0.58, relwidth=0.90, anchor="w", height=48)
 
         cfg = load_config()
         saved_path = cfg.get(f"last_install_path_{self._theme_name}", os.path.expanduser(DEFAULT_PATH))
@@ -277,27 +284,27 @@ class InstallerApp(tk.Tk):
             cursor="hand2", padx=18, pady=6)
         self.browse_btn.pack(side="right", padx=8, pady=6)
         self.browse_btn.bind("<Button-1>", lambda _: self._browse())
-        self.browse_btn.bind("<Enter>",    lambda _: self.browse_btn.configure(bg=self._theme["accent"]))
-        self.browse_btn.bind("<Leave>",    lambda _: self.browse_btn.configure(bg="#1a3a5c"))
 
         # LAUNCH GAME
-        self.launch_btn = tk.Label(
-            self, text="LAUNCH GAME",
-            font=FONT_INSTALL,
-            bg="#1a5c1a", fg="#ffffff",
-            cursor="hand2", pady=12)
-        self.launch_btn.bind("<Button-1>", lambda _: self._launch_game())
-        self.launch_btn.bind("<Enter>", lambda _: self.launch_btn.configure(bg="#2e7d2e"))
-        self.launch_btn.bind("<Leave>", lambda _: self.launch_btn.configure(bg="#1a5c1a"))
+        self.launch_btn = ImageButton(self, command=self._launch_game,
+                                      fallback_text="LAUNCH GAME", bg=t["panel_bg"])
+        self.launch_btn.set_paths(
+            os.path.join(self._res, "buttons", "actionBtn_launch.png"),
+            os.path.join(self._res, "buttons", "actionBtn_launch_sel.png"))
 
-        # INSTALL / UPDATE
-        self.install_btn = tk.Label(
-            self, text="INSTALL / UPDATE",
-            font=FONT_INSTALL,
-            bg=t["install_bg"], fg="#ffffff",
-            cursor="hand2", pady=12)
-        self.install_btn.place(relx=0.04, rely=0.88, relwidth=0.92, anchor="w")
-        self.install_btn.bind("<Button-1>", lambda _: self._start_install())
+        # INSTALL
+        self.install_btn = ImageButton(self, command=self._start_install,
+                                       fallback_text="", bg=t["panel_bg"])
+        self.install_btn.set_paths(
+            os.path.join(self._res, "buttons", "actionBtn_install.png"),
+            os.path.join(self._res, "buttons", "actionBtn_install_sel.png"))
+
+        # UPDATE
+        self.update_btn = ImageButton(self, command=self._start_install,
+                                      fallback_text="", bg=t["panel_bg"])
+        self.update_btn.set_paths(
+            os.path.join(self._res, "buttons", "actionBtn_update.png"),
+            os.path.join(self._res, "buttons", "actionBtn_update_sel.png"))
 
         # Status label (hidden until install)
         self.status_label = tk.Label(
@@ -317,14 +324,11 @@ class InstallerApp(tk.Tk):
             wrap="word", state="disabled")
 
         # OPEN FOLDER
-        self.open_folder_btn = tk.Label(
-            self, text="OPEN THE GAME'S FOLDER",
-            font=FONT_INSTALL,
-            bg="#b8860b", fg="#ffffff",
-            cursor="hand2", pady=12)
-        self.open_folder_btn.bind("<Button-1>", lambda _: self._open_install_folder())
-        self.open_folder_btn.bind("<Enter>", lambda _: self.open_folder_btn.configure(bg="#daa520"))
-        self.open_folder_btn.bind("<Leave>", lambda _: self.open_folder_btn.configure(bg="#b8860b"))
+        self.open_folder_btn = ImageButton(self, command=self._open_install_folder,
+                                           fallback_text="OPEN THE GAME'S FOLDER", bg=t["panel_bg"])
+        self.open_folder_btn.set_paths(
+            os.path.join(self._res, "buttons", "actionBtn_open_folder.png"),
+            os.path.join(self._res, "buttons", "actionBtn_open_folder_sel.png"))
 
         # Social links bar
         self._build_social_bar()
@@ -364,13 +368,15 @@ class InstallerApp(tk.Tk):
         self.loc_row.configure(highlightbackground=t["accent2"])
         self.path_entry.configure(fg=t["text"], insertbackground=t["accent"])
         self.browse_btn.configure(activebackground=t["accent"])
-        self.install_btn.configure(bg=t["install_bg"], fg="#ffffff")
-        self.install_btn.bind("<Enter>", lambda _: self.install_btn.configure(bg=t["install_hover"]))
-        self.install_btn.bind("<Leave>", lambda _: self.install_btn.configure(bg=t["install_bg"]))
         self.browse_btn.configure(fg="#ffffff")
         self.log_box.configure(bg=t["log_bg"], fg=t["log_fg"],
                                insertbackground=t["log_fg"],
                                highlightbackground=t["accent2"])
+        self.install_btn.refresh(t["panel_bg"], selected=False)
+        self.launch_btn.refresh(t["panel_bg"], selected=False)
+        self.open_folder_btn.refresh(t["panel_bg"], selected=False)
+        self.install_btn.refresh(t["panel_bg"], selected=False)
+        self.update_btn.refresh(t["panel_bg"], selected=False)
 
         # Update accent color on social buttons so hover matches theme
         for btn in getattr(self, "_social_btns", []):
@@ -412,26 +418,24 @@ class InstallerApp(tk.Tk):
         outlined(cx, 62, sub, ("Impact", 48, "bold"), t["accent"], size=4)
 
         if not self._log_visible:
-            outlined(cx, 340, "Install location: ", ("Arial", 16, "bold"), "#d7f4ff")
+            outlined(cx, 364, "Install location: ", ("Arial", 16, "bold"), "#d7f4ff")
         elif self._status_text:
             self._draw_status_text(self._status_text)
 
     def _show_persistent_buttons(self):
-        """Show launch + open folder buttons if the game exists at the current path."""
         from installer import GAMES, is_existing_folder
         game = GAMES[self._theme_name]
         path = self._resolve_install_path(self.path_var.get().strip())
         if is_existing_folder(path, game):
-            self.launch_btn.place(relx=0.04, rely=0.72, relwidth=0.92, anchor="w")
-            self.open_folder_btn.place(relx=0.04, rely=0.80, relwidth=0.92, anchor="w")
-            self.install_btn.configure(pady=12)
-            self.install_btn.place(relx=0.04, rely=0.88, relwidth=0.92, anchor="w")
-
+            self.launch_btn.place(relx=0.5, rely=0.64, anchor="n")
+            self.open_folder_btn.place(relx=0.5, rely=0.78, anchor="n")
+            self.update_btn.place(relx=0.5, rely=0.86, anchor="n")
+            self.install_btn.place_forget()
         else:
             self.launch_btn.place_forget()
             self.open_folder_btn.place_forget()
-            self.install_btn.configure(pady=36)
-            self.install_btn.place(relx=0.04, rely=0.80, relwidth=0.92, anchor="w")
+            self.update_btn.place_forget()
+            self.install_btn.place(relx=0.5, rely=0.70, anchor="n")
 
     # ── Interaction ───────────────────────────────────────────────────────────
     def _select_game(self, game: str):
@@ -450,12 +454,8 @@ class InstallerApp(tk.Tk):
             self._refresh_install_btn()
 
     def _refresh_install_btn(self):
-        from installer import GAMES, is_existing_folder
-        game = GAMES[self._theme_name]
-        path = self._resolve_install_path(self.path_var.get().strip())
-        label = "UPDATE" if is_existing_folder(path, game) else "INSTALL"
-        self.install_btn.configure(text=label)
         self._show_persistent_buttons()
+
     def _log(self, msg: str, replace_last=False):
         self.log_box.configure(state="normal")
         if replace_last:
@@ -546,8 +546,7 @@ class InstallerApp(tk.Tk):
                         self._install_path = os.path.join(path, folder)
                     self._show_persistent_buttons()
                 else:
-                    self.install_btn.configure(text="INSTALL")
-                    self.install_btn.place(relx=0.04, rely=0.88, relwidth=0.92, anchor="w")
+                    self._show_persistent_buttons()
             self.after(0, finish)
 
         threading.Thread(target=run_install,
@@ -558,8 +557,8 @@ class InstallerApp(tk.Tk):
         if self._log_visible:
             return
         self._log_visible = True
-        self.geometry("720x640")
-        self.minsize(720, 580)
+        self.geometry("720x740")
+        self.minsize(720, 740)
         self._draw_status_text("Installing…  This will probably take a few minutes.\nPlease be patient.")
         self.log_box.place(relx=0.04, rely=0.36, relwidth=0.92, anchor="nw", height=300)
 
