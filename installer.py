@@ -161,7 +161,16 @@ def run_install(game_key: str, install_dir: str, log_fn, done_fn):
         env["GIT_CONFIG_NOSYSTEM"] = "1"
 
     last_line = [""]
+
     def run(cmd):
+        creationflags = 0
+        startupinfo = None
+
+        if sys.platform == "win32":
+            creationflags = subprocess.CREATE_NO_WINDOW
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+
         proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
@@ -169,7 +178,10 @@ def run_install(game_key: str, install_dir: str, log_fn, done_fn):
             text=True,
             bufsize=1,
             env=env,
+            creationflags=creationflags,
+            startupinfo=startupinfo
         )
+
         last_prefix = None
         for line in proc.stdout:
             line = line.rstrip()
@@ -178,8 +190,10 @@ def run_install(game_key: str, install_dir: str, log_fn, done_fn):
             replace = (prefix is not None and prefix == last_prefix)
             log_fn(line, replace)
             last_prefix = prefix
+
             if line.strip():
                 last_line[0] = line.strip()
+
         proc.wait()
         return proc.returncode
 

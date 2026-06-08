@@ -402,16 +402,40 @@ class InstallerApp(tk.Tk):
         for btn in getattr(self, "_social_btns", []):
             btn.set_accent(t["accent"])
 
+    def _get_time_suffix(self):
+        """Return day/eve/night based on current hour."""
+        from datetime import datetime
+
+        hour = datetime.now().hour
+
+        if 6 <= hour < 18:
+            return "day"
+        elif 18 <= hour < 21:
+            return "eve"
+        else:
+            return "night"
+
     def _load_bg(self, name: str):
         self.canvas_bg.delete("bg")
+
         w = self.winfo_width() or 720
         h = self.winfo_height() or 580
-        fname = {"kanto": "bg_kanto.png", "hoenn": "bg_hoenn.png"}.get(name, "")
-        if fname:
-            img = pil_load_exact(os.path.join(self._res, fname), w, h)
+
+        time_suffix = self._get_time_suffix()
+        fname = f"bg/bg_{name}_{time_suffix}.png"
+
+        full_path = os.path.join(self._res, fname)
+
+        if os.path.isfile(full_path):
+            img = pil_load_exact(full_path, w, h)
             if img:
                 self._bg_ref = img
-                self.canvas_bg.create_image(0, 0, anchor="nw", image=img, tags="bg")
+                self.canvas_bg.create_image(
+                    0, 0,
+                    anchor="nw",
+                    image=img,
+                    tags="bg"
+                )
                 self.canvas_bg.tag_lower("bg")
                 return
         self._bg_ref = None
@@ -632,15 +656,42 @@ class InstallerApp(tk.Tk):
         self._status_text = text
         self.canvas_bg.delete("status")
         w = max(self.winfo_width(), 720)
+
         def outlined(x, y, text, font, fill, size=2):
-            for dx in (-size, 0, size):
-                for dy in (-size, 0, size):
-                    if dx or dy:
-                        self.canvas_bg.create_text(x+dx, y+dy, text=text,
-                                                   font=font, fill="#000000",
-                                                   anchor="n", tags="status")
-            self.canvas_bg.create_text(x, y, text=text, font=font, fill=fill,
-                                       anchor="n", tags="status")
+            offsets = [
+                (-size, 0),
+                (size, 0),
+                (0, -size),
+                (0, size),
+
+                (-size + 1, -size + 1),
+                (size - 1, -size + 1),
+                (-size + 1, size - 1),
+                (size - 1, size - 1),
+            ]
+
+            for dx, dy in offsets:
+                self.canvas_bg.create_text(
+                    x + dx,
+                    y + dy,
+                    text=text,
+                    font=font,
+                    fill="#000000",
+                    anchor="n",
+                    tags="status",
+                    justify="center"
+                )
+
+            self.canvas_bg.create_text(
+                x,
+                y,
+                text=text,
+                font=font,
+                fill=fill,
+                anchor="n",
+                tags="status",
+                justify="center"
+            )
         outlined(w // 2, 136, text, ("Georgia", 24), "#ffffff")
 
     def _clear_status_text(self):
