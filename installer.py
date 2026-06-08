@@ -139,7 +139,6 @@ def _resolve_git(log_fn, done_fn) -> str | None:
 
 
 # ── Install logic ─────────────────────────────────────────────────────────────
-
 def run_install(game_key: str, install_dir: str, log_fn, done_fn):
     game   = GAMES[game_key]
     install_path = Path(install_dir)
@@ -147,9 +146,7 @@ def run_install(game_key: str, install_dir: str, log_fn, done_fn):
         target = install_path
     else:
         target = install_path / game["folder"]
-    game_exe_name = "Game.exe"
-    if game_key == "hoenn":
-        game_exe_name = "InfiniteFusion2.exe"
+
     # Resolve git, downloading MinGit if necessary
     git_exe = _resolve_git(log_fn, done_fn)
     if git_exe is None:
@@ -163,6 +160,7 @@ def run_install(game_key: str, install_dir: str, log_fn, done_fn):
         env["GIT_EXEC_PATH"] = str(_GIT_DIR / "mingw64" / "libexec" / "git-core")
         env["GIT_CONFIG_NOSYSTEM"] = "1"
 
+    last_line = [""]
     def run(cmd):
         proc = subprocess.Popen(
             cmd,
@@ -180,6 +178,8 @@ def run_install(game_key: str, install_dir: str, log_fn, done_fn):
             replace = (prefix is not None and prefix == last_prefix)
             log_fn(line, replace)
             last_prefix = prefix
+            if line.strip():
+                last_line[0] = line.strip()
         proc.wait()
         return proc.returncode
 
@@ -199,7 +199,10 @@ def run_install(game_key: str, install_dir: str, log_fn, done_fn):
             was_update = False
         if rc == 0:
             action = "updated" if was_update else "installed"
-            done_fn(True, f"Successfully {action}!\nLaunch the game with {game_exe_name}")
+            update_message = f"Successfully {action}!"
+            if last_line[0] == "Already up to date.":
+                update_message = "No new update found."
+            done_fn(True, update_message)
         else:
             action = "updating" if was_update else "installing"
             done_fn(False, f"Could not finish {action}.\nCheck the logs for details.")

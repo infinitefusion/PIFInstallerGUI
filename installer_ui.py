@@ -306,10 +306,18 @@ class InstallerApp(tk.Tk):
             os.path.join(self._res, "buttons", "actionBtn_update.png"),
             os.path.join(self._res, "buttons", "actionBtn_update_sel.png"))
 
+        # BACK TO MAIN MENU
+        self.back_btn = ImageButton(self, command=self._show_main_screen,
+                                    fallback_text="← MAIN MENU", bg=t["panel_bg"])
+        self.back_btn.set_paths(
+            os.path.join(self._res, "buttons", "actionBtn_back.png"),
+            os.path.join(self._res, "buttons", "actionBtn_back_sel.png"))
+
+
         # Status label (hidden until install)
         self.status_label = tk.Label(
             self, text="Installing the game...  This may take a few minutes.",
-            font=("Georgia", 24),
+            font=("Georgia", 32),
             fg="#d7f4ff", bg=t["panel_bg"],
             wraplength=640, justify="center")
 
@@ -377,6 +385,7 @@ class InstallerApp(tk.Tk):
         self.open_folder_btn.refresh(t["panel_bg"], selected=False)
         self.install_btn.refresh(t["panel_bg"], selected=False)
         self.update_btn.refresh(t["panel_bg"], selected=False)
+        self.back_btn.refresh(t["panel_bg"], selected=False)
 
         # Update accent color on social buttons so hover matches theme
         for btn in getattr(self, "_social_btns", []):
@@ -511,6 +520,21 @@ class InstallerApp(tk.Tk):
         else:
             subprocess.Popen([str(exe_path)])
 
+    def _show_main_screen(self):
+        self._log_visible = False
+        self.back_btn.place_forget()
+        self.launch_btn.place_forget()
+        self.open_folder_btn.place_forget()
+        self.update_btn.place_forget()
+        self.log_box.place_forget()
+        self._clear_status_text()
+        self.btn_kanto.place(relx=0.5, rely=0.44, anchor="center", x=-150, y=-60)
+        self.btn_hoenn.place(relx=0.5, rely=0.44, anchor="center", x=150, y=-60)
+        self.loc_row.place(relx=0.05, rely=0.58, relwidth=0.90, anchor="w", height=48)
+        self.social_bar.place(relx=0, rely=1.0, relwidth=1.0, anchor="sw", height=SOCIAL_BAR_H)
+        self._load_logo(self._theme_name)
+        self._show_persistent_buttons()
+
     def _start_install(self):
         path = self.path_var.get().strip()
         if not path:
@@ -521,7 +545,8 @@ class InstallerApp(tk.Tk):
         self._install_path = path
 
         # Hide picker UI and social bar, show full-height log
-        for w in (self.btn_kanto, self.btn_hoenn, self.loc_row, self.install_btn):
+        for w in (self.btn_kanto, self.btn_hoenn, self.loc_row,
+                  self.install_btn, self.launch_btn, self.open_folder_btn, self.update_btn):
             w.place_forget()
         self.social_bar.place_forget()
         self._load_logo(self._theme_name)
@@ -540,11 +565,8 @@ class InstallerApp(tk.Tk):
                 self._draw_status_text(msg)
                 if success:
                     folder = self._game_folder_name()
-                    if os.path.basename(path) == folder:
-                        self._install_path = path
-                    else:
-                        self._install_path = os.path.join(path, folder)
-                    self._show_persistent_buttons()
+                    self._install_path = os.path.join(path, folder) if os.path.basename(path) != folder else path
+                    self.back_btn.place(relx=0.5, rely=0.88, anchor="n")
                 else:
                     self._show_persistent_buttons()
             self.after(0, finish)
@@ -557,8 +579,8 @@ class InstallerApp(tk.Tk):
         if self._log_visible:
             return
         self._log_visible = True
-        self.geometry("720x740")
-        self.minsize(720, 740)
+        self.geometry("800x580")
+        self.minsize(900, 720)
         self._draw_status_text("Installing…  This will probably take a few minutes.\nPlease be patient.")
         self.log_box.place(relx=0.04, rely=0.36, relwidth=0.92, anchor="nw", height=300)
 
@@ -575,7 +597,7 @@ class InstallerApp(tk.Tk):
                                                    anchor="n", tags="status")
             self.canvas_bg.create_text(x, y, text=text, font=font, fill=fill,
                                        anchor="n", tags="status")
-        outlined(w // 2, 136, text, ("Georgia", 18), "#ffffff")
+        outlined(w // 2, 136, text, ("Georgia", 24), "#ffffff")
 
     def _clear_status_text(self):
         self._status_text = ""
