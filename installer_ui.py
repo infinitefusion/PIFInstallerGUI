@@ -15,7 +15,7 @@ try:
 except ImportError:
     PIL_AVAILABLE = False
 
-DEFAULT_PATH = "~/Downloads/InfiniteFusion"
+DEFAULT_PATH = Path("~") / "Downloads" / "InfiniteFusion"
 
 THEMES = {
     "kanto": {
@@ -265,7 +265,7 @@ class InstallerApp(tk.Tk):
         self.loc_row.place(relx=0.05, rely=0.58, relwidth=0.90, anchor="w", height=48)
 
         cfg = load_config()
-        saved_path = cfg.get(f"last_install_path_{self._theme_name}", os.path.expanduser(DEFAULT_PATH))
+        saved_path = cfg.get(f"last_install_path_{self._theme_name}", str(DEFAULT_PATH.expanduser()))
         self.path_var = tk.StringVar(value=saved_path)
         self.path_var.trace_add("write", lambda *_: self.after(200, self._refresh_install_btn))
 
@@ -450,7 +450,7 @@ class InstallerApp(tk.Tk):
     def _select_game(self, game: str):
         self._apply_theme(game)
         cfg = load_config()
-        self.path_var.set(cfg.get(f"last_install_path_{game}", os.path.expanduser(DEFAULT_PATH)))
+        self.path_var.set(cfg.get(f"last_install_path_{game}", str(DEFAULT_PATH.expanduser())))
         self._show_persistent_buttons()
         self._refresh_install_btn()
 
