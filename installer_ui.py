@@ -188,8 +188,11 @@ class SocialButton(tk.Frame):
         self.text_lbl.pack(side="left", padx=(0, 6))
 
         # Bind clicks and hover to frame + both child labels
+        # Bind clicks + hover to all parts
         for widget in (self, self.text_lbl) + ((self.icon_lbl,) if icon_photo else ()):
             widget.bind("<Button-1>", self._on_click)
+            widget.bind("<Enter>", self._on_enter)
+            widget.bind("<Leave>", self._on_leave)
 
     def _on_click(self, _):
         webbrowser.open(self._url)
@@ -313,6 +316,12 @@ class InstallerApp(tk.Tk):
             os.path.join(self._res, "buttons", "actionBtn_back.png"),
             os.path.join(self._res, "buttons", "actionBtn_back_sel.png"))
 
+        # TRY AGAIN
+        self.retry_btn = ImageButton(self, command=self._retry_install,
+                                     fallback_text="TRY AGAIN", bg=t["panel_bg"])
+        self.retry_btn.set_paths(
+            os.path.join(self._res, "buttons", "actionBtn_retry.png"),
+            os.path.join(self._res, "buttons", "actionBtn_retry_sel.png"))
 
         # Status label (hidden until install)
         self.status_label = tk.Label(
@@ -386,6 +395,8 @@ class InstallerApp(tk.Tk):
         self.install_btn.refresh(t["panel_bg"], selected=False)
         self.update_btn.refresh(t["panel_bg"], selected=False)
         self.back_btn.refresh(t["panel_bg"], selected=False)
+        self.retry_btn.refresh(t["panel_bg"], selected=False)
+
 
         # Update accent color on social buttons so hover matches theme
         for btn in getattr(self, "_social_btns", []):
@@ -526,6 +537,7 @@ class InstallerApp(tk.Tk):
         self.launch_btn.place_forget()
         self.open_folder_btn.place_forget()
         self.update_btn.place_forget()
+        self.retry_btn.place_forget()
         self.log_box.place_forget()
         self._clear_status_text()
         self.btn_kanto.place(relx=0.5, rely=0.44, anchor="center", x=-150, y=-60)
@@ -534,6 +546,20 @@ class InstallerApp(tk.Tk):
         self.social_bar.place(relx=0, rely=1.0, relwidth=1.0, anchor="sw", height=SOCIAL_BAR_H)
         self._load_logo(self._theme_name)
         self._show_persistent_buttons()
+        self._apply_theme(self._theme_name)
+
+        self.update_idletasks()
+        # Force redraw of widgets that sometimes appear grey
+        self.btn_kanto.refresh(self._theme["panel_bg"], self._theme_name == "kanto")
+        self.btn_hoenn.refresh(self._theme["panel_bg"], self._theme_name == "hoenn")
+
+        for btn in self._social_btns:
+            btn._on_leave(None)
+
+        self.browse_btn.configure(
+            bg="#1a3a5c",
+            fg="#ffffff"
+        )
 
     def _start_install(self):
         path = self.path_var.get().strip()
@@ -565,15 +591,33 @@ class InstallerApp(tk.Tk):
                 self._draw_status_text(msg)
                 if success:
                     folder = self._game_folder_name()
-                    self._install_path = os.path.join(path, folder) if os.path.basename(path) != folder else path
+                    self._install_path = (
+                        os.path.join(path, folder) if os.path.basename(path) != folder else path
+                    )
                     self.back_btn.place(relx=0.5, rely=0.88, anchor="n")
                 else:
-                    self._show_persistent_buttons()
+                    # On failure: show Try Again + Back, hide everything else
+                    self.install_btn.place_forget()
+                    self.launch_btn.place_forget()
+                    self.open_folder_btn.place_forget()
+                    self.update_btn.place_forget()
+                    self.retry_btn.place(relx=0.5, rely=0.80, anchor="n")
+                    self.back_btn.place(relx=0.5, rely=0.88, anchor="n")
             self.after(0, finish)
 
         threading.Thread(target=run_install,
                          args=(self._theme_name, path, log_fn, done_fn),
                          daemon=True).start()
+
+    def _retry_install(self):
+        """Re-run the install using the current path, without returning to main screen."""
+        self.retry_btn.place_forget()
+        self.back_btn.place_forget()
+        self.retry_btn.place_forget()
+        self.log_box.configure(state="normal")
+        self.log_box.delete("1.0", "end")
+        self.log_box.configure(state="disabled")
+        self._start_install()
 
     def _show_log_panel(self):
         if self._log_visible:
