@@ -11,7 +11,7 @@ icon = os.path.join(resources, "icon.ico" if sys.platform == "win32" else "icon.
 
 args = [
     "installer_ui.py",
-    "--name=PokemonInfiniteFusion-Installer",
+    "--name=PokemonInfiniteFusion-Launcher",
     "--onefile",
     "--windowed",
     f"--add-data={resources}{sep}resources",

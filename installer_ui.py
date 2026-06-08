@@ -211,7 +211,7 @@ class SocialButton(tk.Frame):
 class InstallerApp(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Pokémon Infinite Fusion — Installer")
+        self.title("Pokémon Infinite Fusion — Launcher")
         self.geometry("800x580")
         self.minsize(900, 720)
         self.resizable(True, True)
