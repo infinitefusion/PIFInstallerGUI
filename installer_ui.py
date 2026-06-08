@@ -5,6 +5,7 @@ import subprocess
 import threading
 import webbrowser
 
+from config import load_config, save_config
 from installer import run_install
 
 try:
@@ -12,6 +13,8 @@ try:
     PIL_AVAILABLE = True
 except ImportError:
     PIL_AVAILABLE = False
+
+DEFAULT_PATH = "~/Downloads/InfiniteFusion"
 
 THEMES = {
     "kanto": {
@@ -252,7 +255,10 @@ class InstallerApp(tk.Tk):
                                 highlightbackground=t["accent2"])
         self.loc_row.place(relx=0.05, rely=0.74, relwidth=0.90, anchor="w", height=48)
 
-        self.path_var = tk.StringVar(value=os.path.expanduser("~/Games/PokemonInfiniteFusion"))
+        cfg = load_config()
+        saved_path = cfg.get(f"last_install_path_{self._theme_name}", os.path.expanduser(DEFAULT_PATH))
+        self.path_var = tk.StringVar(value=saved_path)
+
         self.path_entry = tk.Entry(self.loc_row, textvariable=self.path_var,
                                    font=("Consolas", 12),
                                    bg="#06101a", fg="#ffffff",
@@ -401,6 +407,9 @@ class InstallerApp(tk.Tk):
 
     def _select_game(self, game: str):
         self._apply_theme(game)
+        cfg = load_config()
+        default = os.path.expanduser(DEFAULT_PATH)
+        self.path_var.set(cfg.get(f"last_install_path_{game}", default))
 
     def _browse(self):
         folder = filedialog.askdirectory(title="Select install folder",
@@ -447,7 +456,7 @@ class InstallerApp(tk.Tk):
 
         self._load_logo(self._theme_name)
         self._show_log_panel()
-
+        save_config({f"last_install_path_{self._theme_name}": path})
         self._log(f"Starting install to: {path}")
 
         def log_fn(msg, replace_last=False):
