@@ -2,11 +2,10 @@ import json
 import os
 from pathlib import Path
 
-APP_NAME = "InfiniteFusionInstaller"
-
+FOLDER_NAME = "infinitefusion-commmon"
 def _config_path() -> Path:
     base = Path(os.environ.get("APPDATA", Path.home()))
-    return base / APP_NAME / "config.json"
+    return base / FOLDER_NAME / "config.json"
 
 def load_config() -> dict:
     try:
