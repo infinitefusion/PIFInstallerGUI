@@ -1,4 +1,5 @@
 import tkinter as tk
+from pathlib import Path
 from tkinter import filedialog, scrolledtext
 import os
 import subprocess
@@ -258,6 +259,7 @@ class InstallerApp(tk.Tk):
         cfg = load_config()
         saved_path = cfg.get(f"last_install_path_{self._theme_name}", os.path.expanduser(DEFAULT_PATH))
         self.path_var = tk.StringVar(value=saved_path)
+        self.path_var.trace_add("write", lambda *_: self.after(200, self._refresh_install_btn))
 
         self.path_entry = tk.Entry(self.loc_row, textvariable=self.path_var,
                                    font=("Consolas", 12),
@@ -408,8 +410,8 @@ class InstallerApp(tk.Tk):
     def _select_game(self, game: str):
         self._apply_theme(game)
         cfg = load_config()
-        default = os.path.expanduser(DEFAULT_PATH)
-        self.path_var.set(cfg.get(f"last_install_path_{game}", default))
+        self.path_var.set(cfg.get(f"last_install_path_{game}", os.path.expanduser(DEFAULT_PATH)))
+        self._refresh_install_btn()  # ← add
 
     def _browse(self):
         folder = filedialog.askdirectory(title="Select install folder",
@@ -417,6 +419,14 @@ class InstallerApp(tk.Tk):
         if folder:
             self.path_var.set(folder)
             self._log(f"Install path set to: {folder}")
+            self._refresh_install_btn()  # ← add
+
+    def _refresh_install_btn(self):
+        from installer import GAMES, is_existing_folder
+        game = GAMES[self._theme_name]
+        path = self._resolve_install_path(self.path_var.get().strip())
+        label = "UPDATE" if is_existing_folder(path, game) else "INSTALL"
+        self.install_btn.configure(text=label)
 
     def _log(self, msg: str, replace_last=False):
         self.log_box.configure(state="normal")
@@ -440,6 +450,17 @@ class InstallerApp(tk.Tk):
         else:
             subprocess.Popen(["xdg-open", self._install_path])
 
+    def _game_folder_name(self) -> str:
+        from installer import GAMES
+        return GAMES[self._theme_name]["folder"]
+
+    def _resolve_install_path(self, base: str) -> Path:
+        from pathlib import Path
+        path = Path(base)
+        if path.name != self._game_folder_name():
+            path = path / self._game_folder_name()
+        return path
+
     def _start_install(self):
         path = self.path_var.get().strip()
         if not path:
@@ -452,11 +473,12 @@ class InstallerApp(tk.Tk):
         # Hide picker UI and social bar, show full-height log
         for w in (self.btn_kanto, self.btn_hoenn, self.loc_row, self.install_btn):
             w.place_forget()
-        self.social_bar.place_forget()          # ← hide social icons during install
-
+        self.social_bar.place_forget()
         self._load_logo(self._theme_name)
         self._show_log_panel()
-        save_config({f"last_install_path_{self._theme_name}": path})
+
+        save_config({f"last_install_path_{self._theme_name}": str(self._resolve_install_path(path))})
+
         self._log(f"Starting install to: {path}")
 
         def log_fn(msg, replace_last=False):
@@ -467,14 +489,14 @@ class InstallerApp(tk.Tk):
                 self._log(msg)
                 self._draw_status_text(msg)
                 if success:
-                    folder = "InfiniteFusion2" if self._theme_name == "hoenn" else "InfiniteFusion"
+                    folder = self._game_folder_name()
                     if os.path.basename(path) == folder:
                         self._install_path = path
                     else:
                         self._install_path = os.path.join(path, folder)
                     self.open_folder_btn.place(relx=0.04, rely=0.93, relwidth=0.92, anchor="w")
                 else:
-                    self.install_btn.configure(text="INSTALL / UPDATE")
+                    self.install_btn.configure(text="INSTALL")
                     self.install_btn.place(relx=0.04, rely=0.93, relwidth=0.92, anchor="w")
 
             self.after(0, finish)
