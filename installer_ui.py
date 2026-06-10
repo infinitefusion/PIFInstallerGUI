@@ -1,3 +1,4 @@
+import ssl
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, scrolledtext
@@ -5,6 +6,7 @@ import os
 import subprocess
 import threading
 import webbrowser
+import json
 
 from config import load_config, save_config
 from installer import run_install
@@ -47,17 +49,24 @@ TITLES = {
     "hoenn": ("POKÉMON INFINITE FUSION 2", "HOENN"),
 }
 
-# (icon filename stem, label, url)
-SOCIAL_LINKS = [
-    ("discord",  "Discord",  "https://discord.gg/infinitefusion"),
-    ("reddit", "Reddit", "https://www.reddit.com/r/PokemonInfiniteFusion/"),
-    ("wiki",     "Wiki",     "https://infinitefusion.fandom.com/wiki/Pok%C3%A9mon_Infinite_Fusion_Wiki"),
-    ("pokedex", "FusionDex", "https://www.fusiondex.org/"),
-    ("youtube",  "YouTube",  "https://www.youtube.com/@PokemonInfiniteFusion_Official"),
-    ("github",   "GitHub",   "https://github.com/infinitefusion/PIFInstallerGUI"),
-    ("showdown", "Fusion Showdown", "https://play.pokeathlon.com/"),
-    ("linktree", "Other Links", "https://linktr.ee/chardub513"),
-]
+import urllib.request
+import io
+
+def fetch_social_links() -> list[dict]:
+    try:
+        url = "https://download.infinitefusion.net/launcher_links.json"
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        req = urllib.request.Request(
+            url,
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        )
+        with urllib.request.urlopen(req, context=ctx, timeout=5) as resp:
+            return json.loads(resp.read().decode())
+    except Exception as e:
+        print(f"fetch_social_links failed: {e}")
+        return []
 
 POWER_CLEAR_AVAILABLE = False #Todo
 
@@ -100,12 +109,20 @@ def pil_load_exact(path, w, h):
     except Exception:
         return None
 
-def pil_load_icon(path, size, bg_color="#000000"):
-    """Load a PNG icon, resize to `size`×`size`, composite onto bg_color, return PhotoImage."""
+def pil_load_icon_url(url: str, size: int, bg_color: str = "#000000"):
     if not PIL_AVAILABLE:
         return None
     try:
-        img = Image.open(path).convert("RGBA").resize((size, size), Image.LANCZOS)
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        req = urllib.request.Request(
+            url,
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        )
+        with urllib.request.urlopen(req, context=ctx, timeout=5) as resp:
+            data = resp.read()
+        img = Image.open(io.BytesIO(data)).convert("RGBA").resize((size, size), Image.LANCZOS)
         bg = Image.new("RGBA", (size, size), (*_hex_to_rgb(bg_color), 255))
         bg.paste(img, mask=img.split()[3])
         return ImageTk.PhotoImage(bg.convert("RGB"))
@@ -168,14 +185,14 @@ class ImageButton(tk.Canvas):
 class SocialButton(tk.Frame):
     """Icon + label button for the social bar. Falls back to text-only if PIL unavailable."""
 
-    def __init__(self, parent, icon_path, label, url, bg, icon_size=ICON_SIZE, **kwargs):
+    def __init__(self, parent, icon_url, label, url, bg, icon_size=ICON_SIZE, **kwargs):
         super().__init__(parent, bg=bg, cursor="hand2", **kwargs)
         self._url       = url
         self._bg        = bg
         self._icon_ref  = None          # keep reference so GC doesn't collect it
 
         # Try to load icon image
-        icon_photo = pil_load_icon(icon_path, icon_size, bg)
+        icon_photo = pil_load_icon_url(icon_url, icon_size, bg)
 
         if icon_photo:
             self._icon_ref = icon_photo
@@ -354,11 +371,9 @@ class InstallerApp(tk.Tk):
         self._build_social_bar()
 
     def _build_social_bar(self):
-        """Pinned-to-bottom row of icon+label social link buttons."""
         self.social_bar = tk.Frame(self, bg="#000000", bd=0)
         self.social_bar.place(relx=0, rely=1.0, relwidth=1.0, anchor="sw", height=SOCIAL_BAR_H)
 
-        # Thin separator line at the top of the bar
         sep = tk.Frame(self.social_bar, bg="#222222", height=1)
         sep.pack(side="top", fill="x")
 
@@ -366,12 +381,25 @@ class InstallerApp(tk.Tk):
         inner.pack(side="top", fill="both", expand=True)
 
         self._social_btns = []
-        for stem, label, url in SOCIAL_LINKS:
-            icon_path = os.path.join(self._icons_dir, f"{stem}.png")
-            btn = SocialButton(inner, icon_path=icon_path, label=label, url=url, bg="#000000")
-            btn.pack(side="left", padx=2, pady=4)
-            btn.set_accent(self._theme["accent"])
-            self._social_btns.append(btn)
+
+        def load_buttons():
+            links = fetch_social_links()
+
+            def build():
+                for item in links:
+                    btn = SocialButton(
+                        inner,
+                        icon_url=item.get("icon_url", ""),
+                        label=item["label"],
+                        url=item["url"],
+                        bg="#000000",
+                    )
+                    btn.pack(side="left", padx=2, pady=4)
+                    btn.set_accent(self._theme["accent"])
+                    self._social_btns.append(btn)
+
+            self.after(0, build)
+        threading.Thread(target=load_buttons, daemon=True).start()
 
     # ── Theme ─────────────────────────────────────────────────────────────────
 
