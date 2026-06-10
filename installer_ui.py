@@ -265,9 +265,16 @@ class InstallerApp(tk.Tk):
         self.canvas_bg = tk.Canvas(self, highlightthickness=0, bd=0)
         self.canvas_bg.place(relx=0, rely=0, relwidth=1, relheight=1)
         tk.Widget.lower(self.canvas_bg)
-        self.bind("<Configure>", lambda e: self._load_bg(self._theme_name)
-                  if e.widget is self else None)
 
+        def _on_resize(e):
+            if e.widget is not self:
+                return
+            self._load_bg(self._theme_name)
+            self._load_logo(self._theme_name)
+            if self._status_text:
+                self._draw_status_text(self._status_text)
+
+        self.bind("<Configure>", _on_resize)
         # Game select buttons
         self.btn_kanto = ImageButton(self, command=lambda: self._select_game("kanto"),
                                      fallback_text="Infinite Fusion 1\nKanto", bg=t["panel_bg"])
