@@ -10,6 +10,7 @@ import json
 
 from config import load_config, save_config
 from installer import run_install
+from remote_config import fetch_social_links
 
 try:
     from PIL import Image, ImageTk
@@ -51,22 +52,6 @@ TITLES = {
 
 import urllib.request
 import io
-
-def fetch_social_links() -> list[dict]:
-    try:
-        url = "https://download.infinitefusion.net/launcher_links.json"
-        ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
-        req = urllib.request.Request(
-            url,
-            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-        )
-        with urllib.request.urlopen(req, context=ctx, timeout=5) as resp:
-            return json.loads(resp.read().decode())
-    except Exception as e:
-        print(f"fetch_social_links failed: {e}")
-        return []
 
 POWER_CLEAR_AVAILABLE = False #Todo
 

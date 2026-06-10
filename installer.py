@@ -14,6 +14,8 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
+from remote_config import fetch_games
+
 # ── Portable Git source ───────────────────────────────────────────────────────
 # PortableGit-<version>-64-bit.7z.exe is a self-extracting archive;
 # the plain .zip build is easier to unpack without 7-zip.
@@ -31,25 +33,29 @@ _GIT_DIR     = _VENDOR_DIR / "git"
 _GIT_EXE     = _GIT_DIR / "cmd" / "git.exe"   # MinGit layout on Windows
 _GIT_INSTALL_URL = "https://git-scm.com/install/"
 
-# ── Game definitions ──────────────────────────────────────────────────────────
-GAMES = {
-    "kanto": {
-        "label":    "Pokémon Infinite Fusion 1",
-        "subtitle": "Kanto",
-        "repo":     "https://github.com/infinitefusion/infinitefusion-e18.git",
-        "branch":   "releases",
-        "folder":   "InfiniteFusion",
-        "exe": "Game.exe",
-    },
-    "hoenn": {
-        "label":    "Pokémon Infinite Fusion 2",
-        "subtitle": "Hoenn",
-        "repo":     "https://github.com/infinitefusion/infinitefusion-hoenn-public.git",
-        "branch":   "releases",
-        "folder":   "InfiniteFusion2",
-        "exe": "InfiniteFusion2.exe",
-    },
-}
+# Remove the hardcoded GAMES dict and replace with:
+def _load_games() -> dict:
+    try:
+        games = fetch_games()
+        if games:
+            return games
+    except Exception:
+        pass
+    # Fallback to hardcoded if fetch fails
+    return {
+        "kanto": {
+            "label": "Pokémon Infinite Fusion 1", "subtitle": "Kanto",
+            "repo": "https://github.com/infinitefusion/infinitefusion-e18.git",
+            "branch": "releases", "folder": "InfiniteFusion", "exe": "Game.exe",
+        },
+        "hoenn": {
+            "label": "Pokémon Infinite Fusion 2", "subtitle": "Hoenn",
+            "repo": "https://github.com/infinitefusion/infinitefusion-hoenn-public.git",
+            "branch": "releases", "folder": "InfiniteFusion2", "exe": "InfiniteFusion2.exe",
+        },
+    }
+
+GAMES = _load_games()
 
 
 # ── Git resolution ────────────────────────────────────────────────────────────
