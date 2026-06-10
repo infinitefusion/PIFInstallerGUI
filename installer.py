@@ -32,16 +32,17 @@ _VENDOR_DIR  = _SCRIPT_DIR / "vendor"
 _GIT_DIR     = _VENDOR_DIR / "git"
 _GIT_EXE     = _GIT_DIR / "cmd" / "git.exe"   # MinGit layout on Windows
 _GIT_INSTALL_URL = "https://git-scm.com/install/"
+ALLOWED_REPO_PREFIX = "https://github.com/infinitefusion/"
 
-# Remove the hardcoded GAMES dict and replace with:
 def _load_games() -> dict:
-    try:
-        games = fetch_games()
-        if games:
-            return games
-    except Exception:
-        pass
-    # Fallback to hardcoded if fetch fails
+    games = fetch_games()
+    for key, game in games.items():
+        if not game.get("repo", "").startswith(ALLOWED_REPO_PREFIX):
+            print(f"Rejected suspicious repo for {key}: {game['repo']}")
+            return _fallback_games()
+    return games
+
+def _fallback_games():
     return {
         "kanto": {
             "label": "Pokémon Infinite Fusion 1", "subtitle": "Kanto",
