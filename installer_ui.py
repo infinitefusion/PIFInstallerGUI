@@ -50,10 +50,13 @@ TITLES = {
 # (icon filename stem, label, url)
 SOCIAL_LINKS = [
     ("discord",  "Discord",  "https://discord.gg/infinitefusion"),
+    ("reddit", "Reddit", "https://www.reddit.com/r/PokemonInfiniteFusion/"),
     ("wiki",     "Wiki",     "https://infinitefusion.fandom.com/wiki/Pok%C3%A9mon_Infinite_Fusion_Wiki"),
+    ("pokedex", "FusionDex", "https://www.fusiondex.org/"),
     ("youtube",  "YouTube",  "https://www.youtube.com/@PokemonInfiniteFusion_Official"),
     ("github",   "GitHub",   "https://github.com/infinitefusion/PIFInstallerGUI"),
-    ("linktree", "Linktree", "https://linktr.ee/chardub513"),
+    ("showdown", "Fusion Showdown", "https://play.pokeathlon.com/"),
+    ("linktree", "Other Links", "https://linktr.ee/chardub513"),
 ]
 
 POWER_CLEAR_AVAILABLE = False #Todo
