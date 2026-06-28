@@ -226,7 +226,7 @@ def run_install(game_key: str, install_dir: str, log_fn, done_fn):
             done_fn(True, update_message)
         else:
             action = "updating" if was_update else "installing"
-            done_fn(False, f"Could not finish {action}.\nCheck the logs for details.")
+            done_fn(False, f"Could not finish {action}.\nCheck the logs in the console below for details.")
 
     except Exception as exc:
         done_fn(False, f"Error: {exc}")
