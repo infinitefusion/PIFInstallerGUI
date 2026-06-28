@@ -224,7 +224,7 @@ class InstallerApp(tk.Tk):
         self.minsize(900, 720)
         self.resizable(True, True)
         self.configure(bg="#000000")
-
+        self._set_window_icon()
         self._theme_name   = "hoenn"
         self._theme        = THEMES["hoenn"]
         self._bg_ref       = None
@@ -239,6 +239,22 @@ class InstallerApp(tk.Tk):
         self.after(100, self._show_persistent_buttons)
         self.after(50, lambda: self._load_logo("hoenn"))
 
+    def _set_window_icon(self):
+        try:
+            import sys
+            from pathlib import Path
+
+            if getattr(sys, "frozen", False):
+                base_path = Path(sys._MEIPASS)
+            else:
+                base_path = Path(__file__).parent
+
+            icon_path = base_path / "resources" / "icon.ico"
+
+            if icon_path.exists():
+                self.iconbitmap(str(icon_path))  # Windows
+        except Exception as e:
+            print("Icon load failed:", e)
 
 
     # ── Build ─────────────────────────────────────────────────────────────────
