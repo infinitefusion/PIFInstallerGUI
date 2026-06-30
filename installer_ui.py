@@ -325,21 +325,21 @@ class InstallerApp(tk.Tk):
 
         # INSTALL
         self.install_btn = ImageButton(self, command=self._start_install,
-                                       fallback_text="", bg=t["panel_bg"])
+                                       fallback_text="Install", bg=t["panel_bg"])
         self.install_btn.set_paths(
             os.path.join(self._res, "buttons", "actionBtn_install.png"),
             os.path.join(self._res, "buttons", "actionBtn_install_sel.png"))
 
         # UPDATE
         self.update_btn = ImageButton(self, command=self._start_install,
-                                      fallback_text="", bg=t["panel_bg"])
+                                      fallback_text="Update", bg=t["panel_bg"])
         self.update_btn.set_paths(
             os.path.join(self._res, "buttons", "actionBtn_update.png"),
             os.path.join(self._res, "buttons", "actionBtn_update_sel.png"))
 
         # BACK TO MAIN MENU
         self.back_btn = ImageButton(self, command=self._show_main_screen,
-                                    fallback_text="← MAIN MENU", bg=t["panel_bg"])
+                                    fallback_text="Back to main menu", bg=t["panel_bg"])
         self.back_btn.set_paths(
             os.path.join(self._res, "buttons", "actionBtn_back.png"),
             os.path.join(self._res, "buttons", "actionBtn_back_sel.png"))
