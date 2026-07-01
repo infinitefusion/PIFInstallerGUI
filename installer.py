@@ -169,7 +169,7 @@ def run_install(game_key: str, install_dir: str, log_fn, done_fn):
 
     last_line = [""]
 
-    def run(cmd):
+    def run(cmd, cwd=None):
         creationflags = 0
         startupinfo = None
 
@@ -185,6 +185,7 @@ def run_install(game_key: str, install_dir: str, log_fn, done_fn):
             text=True,
             bufsize=1,
             env=env,
+            cwd=cwd,
             creationflags=creationflags,
             startupinfo=startupinfo
         )
@@ -204,11 +205,49 @@ def run_install(game_key: str, install_dir: str, log_fn, done_fn):
         proc.wait()
         return proc.returncode
 
+    def _capture(cmd):
+        """Run a command quietly and return (returncode, stdout_text)."""
+        result = subprocess.run(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            text=True, env=env,
+        )
+        return result.returncode, result.stdout.strip()
+
     try:
-        if is_existing_folder(target,game):
-            log_fn(f"Found existing repo at {target} — pulling latest…")
-            rc = run([git_exe, "-C", str(target), "pull", "--recurse-submodules"])
+        if is_existing_folder(target, game):
+            log_fn(f"Found existing repo at {target} — checking for updates…")
+
+            branch = game["branch"] or "HEAD"
+
+            # Record current commit so we can tell whether anything actually changed.
+            _, old_head = _capture([git_exe, "-C", str(target), "rev-parse", "HEAD"])
+
+            # Fetch only — this never touches the working tree, so it can't be
+            # blocked by local modifications the way `pull` (fetch+merge) can be.
+            rc = run([git_exe, "-C", str(target), "fetch", "--depth=1",
+                      "--recurse-submodules", "origin", branch])
+
+            if rc == 0:
+                # Force the working tree to exactly match the fetched commit.
+                # This overwrites any local changes to TRACKED files, but never
+                # touches untracked files (runtime-downloaded content, caches,
+                # save data, etc.) — those are simply left alone.
+                rc = run([git_exe, "-C", str(target), "reset", "--hard",
+                          f"origin/{branch}"])
+
+            if rc == 0:
+                run([git_exe, "-C", str(target), "submodule", "update",
+                     "--init", "--recursive", "--depth=1"])
+
             was_update = True
+
+            if rc == 0:
+                _, new_head = _capture([git_exe, "-C", str(target), "rev-parse", "HEAD"])
+                # No native "Already up to date." message with fetch+reset, so
+                # derive it ourselves by comparing commits before/after.
+                last_line[0] = ("Already up to date."
+                                 if old_head and old_head == new_head
+                                 else "Updated.")
         else:
             target.mkdir(parents=True, exist_ok=True)
             log_fn(f"Cloning {game['label']} ({game['subtitle']})…")
