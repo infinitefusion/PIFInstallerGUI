@@ -26,6 +26,7 @@ env/
 
 # Packaging and build output
 /build/
+/dist/
 *.egg-info/
 *.dmg
 
