@@ -32,6 +32,16 @@ elif sys.platform == "darwin":
     # A directory-backed .app is substantially easier to sign/notarize and
     # also permits an optional pre-bundled Wine runtime.
     args.append("--osx-bundle-identifier=net.infinitefusion.launcher")
+    signing_identity = os.environ.get("PIF_CODESIGN_IDENTITY", "").strip()
+    entitlements_file = os.environ.get("PIF_CODESIGN_ENTITLEMENTS", "").strip()
+    if signing_identity:
+        args.append(f"--codesign-identity={signing_identity}")
+    if entitlements_file:
+        if not os.path.isfile(entitlements_file):
+            raise FileNotFoundError(
+                f"PIF_CODESIGN_ENTITLEMENTS does not exist: {entitlements_file}"
+            )
+        args.append(f"--osx-entitlements-file={entitlements_file}")
 
 if os.path.isdir(bundled_wine):
     args.append(f"--add-data={bundled_wine}{sep}wine")

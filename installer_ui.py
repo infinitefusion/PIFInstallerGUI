@@ -125,7 +125,12 @@ def pil_load_exact(path, w, h):
         return None
 
 
-def pil_load_icon_url(url: str, size: int, bg_color: str = "#000000"):
+def pil_load_icon_url(url: str, size: int):
+    """Download and decode an icon without creating Tk objects.
+
+    This function is safe to call from the social-link loader thread. The
+    resulting PIL image is converted to ImageTk.PhotoImage on the Tk thread.
+    """
     if not PIL_AVAILABLE:
         return None
     try:
@@ -138,12 +143,11 @@ def pil_load_icon_url(url: str, size: int, bg_color: str = "#000000"):
         )
         with urllib.request.urlopen(req, context=ctx, timeout=5) as resp:
             data = resp.read()
-        img = (
+        return (
             Image.open(io.BytesIO(data))
             .convert("RGBA")
             .resize((size, size), Image.LANCZOS)
         )
-        return ImageTk.PhotoImage(img)
     except Exception:
         return None
 
@@ -237,14 +241,16 @@ class ImageButton(tk.Canvas):
 class SocialButton(tk.Frame):
     """Icon + label button for the social bar. Falls back to text-only if PIL unavailable."""
 
-    def __init__(self, parent, icon_url, label, url, bg, icon_size=ICON_SIZE, **kwargs):
+    def __init__(self, parent, icon_image, label, url, bg, **kwargs):
         super().__init__(parent, bg=bg, cursor="hand2", **kwargs)
         self._url = url
         self._bg = bg
         self._icon_ref = None  # keep reference so GC doesn't collect it
 
-        # Try to load icon image
-        icon_photo = pil_load_icon_url(icon_url, icon_size, bg)
+        try:
+            icon_photo = ImageTk.PhotoImage(icon_image) if icon_image else None
+        except Exception:
+            icon_photo = None
 
         if icon_photo:
             self._icon_ref = icon_photo
@@ -553,13 +559,29 @@ class InstallerApp(tk.Tk):
         self._social_btns = []
 
         def load_buttons():
-            links = fetch_social_links()
+            links = []
+            for item in fetch_social_links():
+                if not isinstance(item, dict):
+                    continue
+                label = item.get("label")
+                url = item.get("url")
+                if not isinstance(label, str) or not isinstance(url, str):
+                    continue
+                links.append(
+                    {
+                        "label": label,
+                        "url": url,
+                        "icon_image": pil_load_icon_url(
+                            item.get("icon_url", ""), ICON_SIZE
+                        ),
+                    }
+                )
 
             def build():
                 for item in links:
                     btn = SocialButton(
                         self.social_button_group,
-                        icon_url=item.get("icon_url", ""),
+                        icon_image=item["icon_image"],
                         label=item["label"],
                         url=item["url"],
                         bg=self._theme["footer_bg"],
@@ -817,12 +839,21 @@ class InstallerApp(tk.Tk):
             self.after(0, lambda: self._log(message, replace_last))
 
         def worker():
+            error = None
             try:
-                from wine_runtime import launch_game
+                from wine_runtime import WineRuntimeError, launch_game
 
                 launch_game(exe_path, self._theme_name, log_fn)
-            except Exception as exc:
+            except WineRuntimeError as exc:
                 error = str(exc)
+            except Exception as exc:
+                log_fn(f"Unexpected launcher failure ({type(exc).__name__}): {exc}")
+                error = (
+                    "An unexpected launcher error occurred. "
+                    "See the launcher log for details."
+                )
+
+            if error is not None:
 
                 def failed():
                     message = f"Could not launch the game: {error}"

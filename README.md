@@ -37,10 +37,25 @@ Build the Windows `.exe` on Windows and the macOS `.app` on macOS. Public macOS
 distribution still requires signing and notarizing the resulting app and any
 bundled runtime with the project's Apple Developer identity.
 
+Release builds can pass a Developer ID identity and optional entitlements file
+without storing signing information in the repository:
+
+```bash
+PIF_CODESIGN_IDENTITY="Developer ID Application: Team Name (TEAMID)" \
+PIF_CODESIGN_ENTITLEMENTS="/path/to/entitlements.plist" \
+python build.py
+```
+
+Both variables are optional. Public CI leaves them unset and produces an
+ad-hoc-signed validation build; release signing and notarization should run only
+in a protected workflow with Apple credentials.
+
 ## Runtime override
 
 For development or custom deployments, `PIF_WINE_BINARY` can point to a Wine
 executable and `PIF_LAUNCHER_DATA_DIR` can override the per-user data directory.
+Remote configuration requests can be tuned with `PIF_REMOTE_CONFIG_ATTEMPTS`,
+`PIF_REMOTE_CONFIG_TIMEOUT`, and `PIF_REMOTE_CONFIG_BACKOFF`.
 
 See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for the managed runtime's
 source and license information.

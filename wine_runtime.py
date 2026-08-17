@@ -286,7 +286,9 @@ def _download_archive(destination: Path, log_fn: LogFn) -> None:
         ) from exc
 
 
-def _verify_archive(archive: Path) -> None:
+def _verify_archive(archive: Path, log_fn: LogFn | None = None) -> None:
+    if log_fn:
+        _log(log_fn, "Calculating the Wine archive SHA-256 checksum...")
     digest = hashlib.sha256()
     with archive.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
@@ -297,6 +299,8 @@ def _verify_archive(archive: Path) -> None:
             "Wine download checksum mismatch. The download was removed; please try again. "
             f"Expected {WINE_SHA256}, got {actual}."
         )
+    if log_fn:
+        _log(log_fn, f"Verified Wine archive SHA-256: {actual}")
 
 
 def _resolved_inside(root: Path, candidate: Path) -> bool:
@@ -308,7 +312,11 @@ def _resolved_inside(root: Path, candidate: Path) -> bool:
 
 
 def _validate_archive_member(member: tarfile.TarInfo, destination: Path) -> None:
-    """Reject archive entries that could write outside the staging directory."""
+    """Allow only directories, files, and safe relative symbolic links.
+
+    Hard links and special files are rejected. Every output and symbolic-link
+    target must resolve inside the disposable staging directory.
+    """
     member_path = PurePosixPath(member.name)
     if member_path.is_absolute() or ".." in member_path.parts:
         raise WineRuntimeError(f"Unsafe path in Wine archive: {member.name!r}")
@@ -317,26 +325,69 @@ def _validate_archive_member(member: tarfile.TarInfo, destination: Path) -> None
     if not _resolved_inside(destination, output_path):
         raise WineRuntimeError(f"Unsafe path in Wine archive: {member.name!r}")
 
-    if member.issym() or member.islnk():
+    if member.islnk():
+        raise WineRuntimeError(
+            f"Hard links are not supported in the Wine archive: {member.name!r}"
+        )
+
+    if member.issym():
         link_path = PurePosixPath(member.linkname)
         if link_path.is_absolute():
             raise WineRuntimeError(
                 f"Unsafe link in Wine archive: {member.name!r} -> {member.linkname!r}"
             )
-        link_base = output_path.parent if member.issym() else destination
-        link_target = link_base.joinpath(*link_path.parts)
+        link_target = output_path.parent.joinpath(*link_path.parts)
         if not _resolved_inside(destination, link_target):
             raise WineRuntimeError(
                 f"Unsafe link in Wine archive: {member.name!r} -> {member.linkname!r}"
             )
 
-    if not (member.isfile() or member.isdir() or member.issym() or member.islnk()):
+    if not (member.isfile() or member.isdir() or member.issym()):
         raise WineRuntimeError(
             f"Unsupported special file in Wine archive: {member.name!r}"
         )
 
 
+def _sanitized_symlink_target(
+    member: tarfile.TarInfo, output: Path, destination: Path
+) -> str:
+    """Return a normalized, relocatable link to the already-validated target."""
+    link_path = PurePosixPath(member.linkname)
+    resolved_parent = output.parent.resolve(strict=False)
+    resolved_target = output.parent.joinpath(*link_path.parts).resolve(strict=False)
+    if not _resolved_inside(destination, resolved_target):
+        raise WineRuntimeError(
+            f"Unsafe link in Wine archive: {member.name!r} -> {member.linkname!r}"
+        )
+    # Keep the symlink relative so moving staging into its final runtime path
+    # does not leave a link pointing back at the temporary directory.
+    return os.path.relpath(resolved_target, start=resolved_parent)
+
+
+def _remove_runtime_tree(path: Path) -> None:
+    """Remove a disposable runtime tree, repairing read-only archive modes."""
+    if path.is_symlink() or path.is_file():
+        path.unlink(missing_ok=True)
+        return
+    if not path.exists():
+        return
+
+    def make_writable_and_retry(function, target, _error_info):
+        try:
+            os.chmod(target, 0o700)
+        except OSError:
+            pass
+        try:
+            os.chmod(Path(target).parent, 0o700)
+        except OSError:
+            pass
+        function(target)
+
+    shutil.rmtree(path, onerror=make_writable_and_retry)
+
+
 def _extract_archive(archive: Path, destination: Path) -> None:
+    """Extract a validated tar into a disposable, not-yet-active directory."""
     destination.mkdir(parents=True, mode=0o700, exist_ok=True)
     try:
         with tarfile.open(archive, "r:xz") as bundle:
@@ -376,7 +427,9 @@ def _extract_archive(archive: Path, destination: Path) -> None:
                     )
 
                 if member.issym():
-                    os.symlink(member.linkname, output)
+                    os.symlink(
+                        _sanitized_symlink_target(member, output, destination), output
+                    )
                     continue
 
                 source = bundle.extractfile(member)
@@ -405,8 +458,10 @@ def _extract_archive(archive: Path, destination: Path) -> None:
                     follow_symlinks=False,
                 )
     except WineRuntimeError:
+        _remove_runtime_tree(destination)
         raise
     except (OSError, tarfile.TarError) as exc:
+        _remove_runtime_tree(destination)
         raise WineRuntimeError(
             f"Could not extract the managed Wine runtime: {exc}"
         ) from exc
@@ -430,8 +485,7 @@ def install_managed_wine(log_fn: LogFn) -> WineSelection:
         if existing:
             return existing
 
-        if staging.exists():
-            shutil.rmtree(staging)
+        _remove_runtime_tree(staging)
         archive.unlink(missing_ok=True)
 
         _log(
@@ -449,7 +503,7 @@ def install_managed_wine(log_fn: LogFn) -> WineSelection:
                     "The managed Wine archive is missing or unreadable after download."
                 )
             _log(log_fn, "Verifying Wine download...")
-            _verify_archive(archive)
+            _verify_archive(archive, log_fn)
             _log(log_fn, "Installing the managed Wine runtime...")
             _extract_archive(archive, staging)
 
@@ -459,11 +513,15 @@ def install_managed_wine(log_fn: LogFn) -> WineSelection:
                     "Wine was extracted, but its executable was not found or had the wrong version."
                 )
 
-            if root.exists():
-                shutil.rmtree(root)
-            staging.rename(root)
+            if root.exists() or root.is_symlink():
+                _remove_runtime_tree(root)
+            # Staging is complete and version-checked before this single,
+            # same-filesystem activation step. No partially extracted runtime
+            # is ever exposed at the active path.
+            staging.replace(root)
             installed = _selection_from_root(root, "managed Wine")
             if not installed:
+                _remove_runtime_tree(root)
                 raise WineRuntimeError(
                     "The managed Wine runtime could not be activated after extraction."
                 )
@@ -471,8 +529,7 @@ def install_managed_wine(log_fn: LogFn) -> WineSelection:
         finally:
             archive.unlink(missing_ok=True)
             archive.with_name(f"{archive.name}.part").unlink(missing_ok=True)
-            if staging.exists():
-                shutil.rmtree(staging)
+            _remove_runtime_tree(staging)
 
 
 def select_wine(log_fn: LogFn) -> WineSelection:

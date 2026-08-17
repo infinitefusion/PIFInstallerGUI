@@ -88,7 +88,7 @@ class WineRuntimeTests(unittest.TestCase):
 
                 link = tarfile.TarInfo("Wine Stable.app/Contents/Versions/Current")
                 link.type = tarfile.SYMTYPE
-                link.linkname = "A"
+                link.linkname = "./A"
                 bundle.addfile(link)
 
             wine_runtime._extract_archive(archive, destination)
@@ -121,6 +121,7 @@ class WineRuntimeTests(unittest.TestCase):
             with self.assertRaisesRegex(wine_runtime.WineRuntimeError, "Unsafe path"):
                 wine_runtime._extract_archive(archive, destination)
             self.assertFalse(escaped.exists())
+            self.assertFalse(destination.exists())
 
     def test_safe_extract_rejects_escaping_symlink(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -136,6 +137,68 @@ class WineRuntimeTests(unittest.TestCase):
 
             with self.assertRaisesRegex(wine_runtime.WineRuntimeError, "Unsafe link"):
                 wine_runtime._extract_archive(archive, destination)
+            self.assertFalse(destination.exists())
+
+    def test_safe_extract_rejects_hard_links_explicitly(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            archive = root / "wine.tar.xz"
+            destination = root / "runtime"
+
+            with tarfile.open(archive, "w:xz") as bundle:
+                regular = tarfile.TarInfo("Wine Stable.app/original")
+                regular.size = 4
+                bundle.addfile(regular, io.BytesIO(b"data"))
+
+                link = tarfile.TarInfo("Wine Stable.app/hardlink")
+                link.type = tarfile.LNKTYPE
+                link.linkname = "Wine Stable.app/original"
+                bundle.addfile(link)
+
+            with self.assertRaisesRegex(
+                wine_runtime.WineRuntimeError, "Hard links are not supported"
+            ):
+                wine_runtime._extract_archive(archive, destination)
+            self.assertFalse(destination.exists())
+
+    @unittest.skipIf(os.name == "nt", "managed Wine installs are macOS-only")
+    def test_failed_install_removes_read_only_staging_tree(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "runtimes" / "wine-11.0"
+            staging = root.parent / ".wine-11.0.installing"
+            archive = root.parent / wine_runtime.WINE_ARCHIVE
+
+            def download(destination, _log_fn):
+                destination.write_bytes(b"archive")
+
+            def fail_extract(_archive, destination):
+                directory = destination / "partial"
+                directory.mkdir(parents=True)
+                (directory / "file").write_text("partial", encoding="utf-8")
+                directory.chmod(0o500)
+                raise wine_runtime.WineRuntimeError("interrupted extraction")
+
+            with (
+                mock.patch.object(wine_runtime, "_managed_root", return_value=root),
+                mock.patch.object(
+                    wine_runtime, "_selection_from_root", return_value=None
+                ),
+                mock.patch.object(
+                    wine_runtime, "_download_archive", side_effect=download
+                ),
+                mock.patch.object(wine_runtime, "_verify_archive"),
+                mock.patch.object(
+                    wine_runtime, "_extract_archive", side_effect=fail_extract
+                ),
+            ):
+                with self.assertRaisesRegex(
+                    wine_runtime.WineRuntimeError, "interrupted extraction"
+                ):
+                    wine_runtime.install_managed_wine(self.log_fn)
+
+            self.assertFalse(staging.exists())
+            self.assertFalse(archive.exists())
+            self.assertFalse(root.exists())
 
     def test_partial_download_is_removed(self):
         class Response(io.BytesIO):
