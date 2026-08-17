@@ -4,6 +4,7 @@ from pathlib import Path
 from tkinter import filedialog, scrolledtext
 import os
 import subprocess
+import sys
 import threading
 import webbrowser
 import json
@@ -13,7 +14,8 @@ from installer import run_install
 from remote_config import fetch_social_links
 
 try:
-    from PIL import Image, ImageTk
+    from PIL import Image, ImageChops, ImageOps, ImageTk
+
     PIL_AVAILABLE = True
 except ImportError:
     PIL_AVAILABLE = False
@@ -22,68 +24,96 @@ DEFAULT_PATH = Path("~") / "Downloads" / "InfiniteFusion"
 
 THEMES = {
     "kanto": {
-        "accent":        "#ff4444",
-        "accent2":       "#8b1a1a",
-        "text":          "#ffe8e8",
-        "subtext":       "#cc9999",
-        "log_bg":        "#100505",
-        "log_fg":        "#ff9999",
-        "install_bg":    "#cc2222",
+        "accent": "#ff4444",
+        "accent2": "#8b1a1a",
+        "text": "#ffe8e8",
+        "subtext": "#cc9999",
+        "log_bg": "#100505",
+        "log_fg": "#ff9999",
+        "install_bg": "#cc2222",
         "install_hover": "#ff4444",
-        "panel_bg":      "#1a0808",
+        "panel_bg": "#1a0808",
+        "surface": "#250d12",
+        "field_bg": "#13070a",
+        "footer_bg": "#2a1016",
+        "footer_text": "#edc8cb",
+        "footer_hover": "#421923",
+        "footer_border": "#a72d3a",
     },
     "hoenn": {
-        "accent":        "#00b4d8",
-        "accent2":       "#0077b6",
-        "text":          "#caf0f8",
-        "subtext":       "#90e0ef",
-        "log_bg":        "#050d15",
-        "log_fg":        "#48cae4",
-        "install_bg":    "#0096c7",
+        "accent": "#00b4d8",
+        "accent2": "#0077b6",
+        "text": "#caf0f8",
+        "subtext": "#90e0ef",
+        "log_bg": "#050d15",
+        "log_fg": "#48cae4",
+        "install_bg": "#0096c7",
         "install_hover": "#00b4d8",
-        "panel_bg":      "#050d15",
+        "panel_bg": "#050d15",
+        "surface": "#071e2c",
+        "field_bg": "#03121c",
+        "footer_bg": "#082638",
+        "footer_text": "#c7ebf2",
+        "footer_hover": "#0d354c",
+        "footer_border": "#0e87a5",
     },
 }
 
-TITLES = {
-    "kanto": ("POKÉMON INFINITE FUSION 1", "KANTO"),
-    "hoenn": ("POKÉMON INFINITE FUSION 2", "HOENN"),
+EDITION_LABELS = {
+    "kanto": "POKÉMON INFINITE FUSION KANTO",
+    "hoenn": "POKÉMON INFINITE FUSION HOENN",
 }
 
 import urllib.request
 import io
 
-POWER_CLEAR_AVAILABLE = False #Todo
+POWER_CLEAR_AVAILABLE = False  # Todo
 
-ICON_SIZE       = 24          # px — icons are resized to this square
-SOCIAL_BAR_H    = 44          # px — height of the bar
+ICON_SIZE = 24  # px — icons are resized to this square
+SOCIAL_BAR_H = 50  # px — height of the bar
 _PC = "Power Clear" if POWER_CLEAR_AVAILABLE else "Georgia"
 
-FONT_BTN     = (_PC, 12, "bold")
+FONT_BTN = (_PC, 12, "bold")
 FONT_INSTALL = (_PC, 14, "bold")
-FONT_LOG     = ("Consolas", 9)          # keep monospace for logs
-FONT_LABEL   = (_PC, 8, "bold")
-FONT_SOCIAL  = (_PC, 10, "bold")
-BTN_W, BTN_H    = 256, 199
+FONT_LOG = ("Consolas", 9)  # keep monospace for logs
+FONT_LABEL = (_PC, 8, "bold")
+FONT_SOCIAL = ("Arial", 10, "bold")
+BTN_W, BTN_H = 256, 199
 
 
 # ── PIL helpers ───────────────────────────────────────────────────────────────
+
 
 def _hex_to_rgb(hex_color):
     h = hex_color.lstrip("#")
     return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
 
-def pil_load_native(path, bg_color="#000000"):
+
+def pil_load_native(path, bg_color="#000000", tint=None):
     if not PIL_AVAILABLE:
         return None, 0, 0
     try:
         img = Image.open(path).convert("RGBA")
+        if tint:
+            # Re-hue only the saturated purple button chrome. Grayscale text,
+            # icons, shadows, and transparent edges retain their source colors.
+            hue, saturation, value = img.convert("RGB").convert("HSV").split()
+            hue_mask = hue.point(lambda px: 255 if 165 <= px <= 225 else 0)
+            saturation_mask = saturation.point(lambda px: 255 if px >= 55 else 0)
+            tint_mask = ImageChops.multiply(hue_mask, saturation_mask)
+            tint_mask = ImageChops.multiply(tint_mask, img.getchannel("A"))
+            colorized = ImageOps.colorize(value, black="#030507", white=tint).convert(
+                "RGBA"
+            )
+            colorized.putalpha(img.getchannel("A"))
+            img = Image.composite(colorized, img, tint_mask)
         bg = Image.new("RGBA", img.size, (*_hex_to_rgb(bg_color), 255))
         bg.paste(img, mask=img.split()[3])
         photo = ImageTk.PhotoImage(bg.convert("RGB"))
         return photo, img.width, img.height
     except Exception:
         return None, 0, 0
+
 
 def pil_load_exact(path, w, h):
     if not PIL_AVAILABLE or w < 1 or h < 1:
@@ -94,6 +124,7 @@ def pil_load_exact(path, w, h):
     except Exception:
         return None
 
+
 def pil_load_icon_url(url: str, size: int, bg_color: str = "#000000"):
     if not PIL_AVAILABLE:
         return None
@@ -103,53 +134,81 @@ def pil_load_icon_url(url: str, size: int, bg_color: str = "#000000"):
         ctx.verify_mode = ssl.CERT_NONE
         req = urllib.request.Request(
             url,
-            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+            headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            },
         )
         with urllib.request.urlopen(req, context=ctx, timeout=5) as resp:
             data = resp.read()
-        img = Image.open(io.BytesIO(data)).convert("RGBA").resize((size, size), Image.LANCZOS)
-        bg = Image.new("RGBA", (size, size), (*_hex_to_rgb(bg_color), 255))
-        bg.paste(img, mask=img.split()[3])
-        return ImageTk.PhotoImage(bg.convert("RGB"))
+        img = (
+            Image.open(io.BytesIO(data))
+            .convert("RGBA")
+            .resize((size, size), Image.LANCZOS)
+        )
+        return ImageTk.PhotoImage(img)
     except Exception:
         return None
 
 
 # ── ImageButton ───────────────────────────────────────────────────────────────
 
+
 class ImageButton(tk.Canvas):
     def __init__(self, parent, command, fallback_text="", **kwargs):
-        super().__init__(parent, width=BTN_W, height=BTN_H,
-                         highlightthickness=0, bd=0, cursor="hand2", **kwargs)
-        self._command    = command
-        self._fallback   = fallback_text
-        self._img_ref    = None
+        super().__init__(
+            parent,
+            width=BTN_W,
+            height=BTN_H,
+            highlightthickness=0,
+            bd=0,
+            cursor="hand2",
+            **kwargs,
+        )
+        self._command = command
+        self._fallback = fallback_text
+        self._img_ref = None
         self._img_normal = None
-        self._img_sel    = None
-        self._selected   = False        # ← track state
-        self._bg_color   = "#000000"    # ← remember bg for re-render
+        self._img_sel = None
+        self._selected = False  # ← track state
+        self._bg_color = "#000000"  # ← remember bg for re-render
+        self._tint = None
+        self._render_cache = {}
 
-        self.bind("<Button-1>",        lambda _: self.configure(highlightthickness=2,
-                                                                highlightbackground="#ffffff"))
+        self.bind(
+            "<Button-1>",
+            lambda _: self.configure(
+                highlightthickness=2, highlightbackground="#ffffff"
+            ),
+        )
         self.bind("<ButtonRelease-1>", self._on_release)
         self.bind("<Enter>", lambda _: self._redraw(True))
         self.bind("<Leave>", lambda _: self._redraw(self._selected))
 
     def set_paths(self, normal_path, selected_path):
         self._img_normal = normal_path
-        self._img_sel    = selected_path
+        self._img_sel = selected_path
 
     def refresh(self, bg_color, selected: bool):
         self._bg_color = bg_color
         self._selected = selected
         self._redraw(selected)
 
+    def set_tint(self, color):
+        self._tint = color
+
     def _redraw(self, use_sel: bool):
         self.configure(bg=self._bg_color)
         self.delete("all")
         path = (self._img_sel if use_sel else self._img_normal) or ""
         if path and os.path.isfile(path):
-            img, w, h = pil_load_native(path, self._bg_color)
+            cache_key = (path, self._bg_color, self._tint)
+            cached = self._render_cache.get(cache_key)
+            if cached:
+                img, w, h = cached
+            else:
+                img, w, h = pil_load_native(path, self._bg_color, self._tint)
+                if img:
+                    self._render_cache[cache_key] = (img, w, h)
             if img:
                 self._img_ref = img
                 self.configure(width=w, height=h)
@@ -157,8 +216,14 @@ class ImageButton(tk.Canvas):
                 return
         self._img_ref = None
         self.configure(width=BTN_W, height=BTN_H)
-        self.create_text(BTN_W // 2, BTN_H // 2, text=self._fallback,
-                         fill="#ffffff", font=FONT_BTN, justify="center")
+        self.create_text(
+            BTN_W // 2,
+            BTN_H // 2,
+            text=self._fallback,
+            fill="#ffffff",
+            font=FONT_BTN,
+            justify="center",
+        )
 
     def _on_release(self, _):
         self.configure(highlightthickness=0)
@@ -167,14 +232,15 @@ class ImageButton(tk.Canvas):
 
 # ── SocialButton ──────────────────────────────────────────────────────────────
 
+
 class SocialButton(tk.Frame):
     """Icon + label button for the social bar. Falls back to text-only if PIL unavailable."""
 
     def __init__(self, parent, icon_url, label, url, bg, icon_size=ICON_SIZE, **kwargs):
         super().__init__(parent, bg=bg, cursor="hand2", **kwargs)
-        self._url       = url
-        self._bg        = bg
-        self._icon_ref  = None          # keep reference so GC doesn't collect it
+        self._url = url
+        self._bg = bg
+        self._icon_ref = None  # keep reference so GC doesn't collect it
 
         # Try to load icon image
         icon_photo = pil_load_icon_url(icon_url, icon_size, bg)
@@ -185,16 +251,20 @@ class SocialButton(tk.Frame):
             self.icon_lbl.pack(side="left", padx=(6, 3))
         else:
             # No image — just a placeholder space so layout stays consistent
-            tk.Label(self, text="•", bg=bg, fg="#888888",
-                     font=FONT_SOCIAL, cursor="hand2").pack(side="left", padx=(6, 3))
+            self.icon_lbl = tk.Label(
+                self, text="•", bg=bg, fg="#888888", font=FONT_SOCIAL, cursor="hand2"
+            )
+            self.icon_lbl.pack(side="left", padx=(6, 3))
 
-        self.text_lbl = tk.Label(self, text=label, bg=bg, fg="#aaaaaa",
-                                  font=FONT_SOCIAL, cursor="hand2")
+        self.text_lbl = tk.Label(
+            self, text=label, bg=bg, fg="#aaaaaa", font=FONT_SOCIAL, cursor="hand2"
+        )
         self.text_lbl.pack(side="left", padx=(0, 6))
 
         # Bind clicks and hover to frame + both child labels
         # Bind clicks + hover to all parts
-        for widget in (self, self.text_lbl) + ((self.icon_lbl,) if icon_photo else ()):
+        self._widgets = (self, self.icon_lbl, self.text_lbl)
+        for widget in self._widgets:
             widget.bind("<Button-1>", self._on_click)
             widget.bind("<Enter>", self._on_enter)
             widget.bind("<Leave>", self._on_leave)
@@ -202,19 +272,29 @@ class SocialButton(tk.Frame):
     def _on_click(self, _):
         webbrowser.open(self._url)
 
-    def set_accent(self, color: str):
-        """Update hover accent color (called when theme changes)."""
-        self._accent = color
+    def set_theme(self, bg: str, text: str, accent: str, hover_bg: str):
+        self._bg = bg
+        self._text_color = text
+        self._accent = accent
+        self._hover_bg = hover_bg
+        for widget in self._widgets:
+            widget.configure(bg=bg)
+        self.text_lbl.configure(fg=text)
 
     def _on_enter(self, _):
         accent = getattr(self, "_accent", "#00b4d8")
         self.text_lbl.configure(fg=accent)
+        for widget in self._widgets:
+            widget.configure(bg=getattr(self, "_hover_bg", self._bg))
 
     def _on_leave(self, _):
-        self.text_lbl.configure(fg="#aaaaaa")
+        self.text_lbl.configure(fg=getattr(self, "_text_color", "#aaaaaa"))
+        for widget in self._widgets:
+            widget.configure(bg=self._bg)
 
 
 # ── Main app ──────────────────────────────────────────────────────────────────
+
 
 class InstallerApp(tk.Tk):
     def __init__(self):
@@ -225,14 +305,16 @@ class InstallerApp(tk.Tk):
         self.resizable(True, True)
         self.configure(bg="#000000")
         self._set_window_icon()
-        self._theme_name   = "hoenn"
-        self._theme        = THEMES["hoenn"]
-        self._bg_ref       = None
-        self._log_visible  = False
-        self._status_text  = ""
+        self._theme_name = "hoenn"
+        self._theme = THEMES["hoenn"]
+        self._bg_ref = None
+        self._log_visible = False
+        self._status_text = ""
         self._install_path = None
-        self._res          = os.path.join(os.path.dirname(os.path.abspath(__file__)), "resources")
-        self._icons_dir    = os.path.join(self._res, "icons")
+        self._res = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "resources"
+        )
+        self._icons_dir = os.path.join(self._res, "icons")
 
         self._build_ui()
         self._apply_theme("hoenn")
@@ -256,7 +338,6 @@ class InstallerApp(tk.Tk):
         except Exception as e:
             print("Icon load failed:", e)
 
-
     # ── Build ─────────────────────────────────────────────────────────────────
 
     def _build_ui(self):
@@ -277,116 +358,196 @@ class InstallerApp(tk.Tk):
 
         self.bind("<Configure>", _on_resize)
         # Game select buttons
-        self.btn_kanto = ImageButton(self, command=lambda: self._select_game("kanto"),
-                                     fallback_text="Infinite Fusion 1\nKanto", bg=t["panel_bg"])
-        self.btn_kanto.set_paths(os.path.join(self._res, "btn_kanto.png"),
-                                 os.path.join(self._res, "btn_kanto_sel.png"))
+        self.btn_kanto = ImageButton(
+            self,
+            command=lambda: self._select_game("kanto"),
+            fallback_text="Infinite Fusion 1\nKanto",
+            bg=t["panel_bg"],
+        )
+        self.btn_kanto.set_paths(
+            os.path.join(self._res, "btn_kanto.png"),
+            os.path.join(self._res, "btn_kanto_sel.png"),
+        )
         self.btn_kanto.place(relx=0.5, rely=0.44, anchor="center", x=-150, y=-60)
 
-        self.btn_hoenn = ImageButton(self, command=lambda: self._select_game("hoenn"),
-                                     fallback_text="Infinite Fusion 2\nHoenn", bg=t["panel_bg"])
-        self.btn_hoenn.set_paths(os.path.join(self._res, "btn_hoenn.png"),
-                                 os.path.join(self._res, "btn_hoenn_sel.png"))
+        self.btn_hoenn = ImageButton(
+            self,
+            command=lambda: self._select_game("hoenn"),
+            fallback_text="Infinite Fusion 2\nHoenn",
+            bg=t["panel_bg"],
+        )
+        self.btn_hoenn.set_paths(
+            os.path.join(self._res, "btn_hoenn.png"),
+            os.path.join(self._res, "btn_hoenn_sel.png"),
+        )
         self.btn_hoenn.place(relx=0.5, rely=0.44, anchor="center", x=150, y=-60)
 
         # Install location row
-        self.loc_row = tk.Frame(self, bg="#08111d", bd=0,
-                                highlightthickness=2,
-                                highlightbackground=t["accent2"])
+        self.loc_row = tk.Frame(
+            self,
+            bg="#08111d",
+            bd=0,
+            highlightthickness=2,
+            highlightbackground=t["accent2"],
+        )
         self.loc_row.place(relx=0.05, rely=0.58, relwidth=0.90, anchor="w", height=48)
 
         cfg = load_config()
-        saved_path = cfg.get(f"last_install_path_{self._theme_name}", str(DEFAULT_PATH.expanduser()))
+        saved_path = cfg.get(
+            f"last_install_path_{self._theme_name}", str(DEFAULT_PATH.expanduser())
+        )
         self.path_var = tk.StringVar(value=saved_path)
-        self.path_var.trace_add("write", lambda *_: self.after(200, self._refresh_install_btn))
+        self.path_var.trace_add(
+            "write", lambda *_: self.after(200, self._refresh_install_btn)
+        )
 
-        self.path_entry = tk.Entry(self.loc_row, textvariable=self.path_var,
-                                   font=("Consolas", 12),
-                                   bg="#06101a", fg="#ffffff",
-                                   insertbackground="#ffffff",
-                                   relief="flat", bd=0, highlightthickness=0)
-        self.path_entry.pack(side="left", fill="both", expand=True, padx=(14, 10), pady=10)
+        self.path_entry = tk.Entry(
+            self.loc_row,
+            textvariable=self.path_var,
+            font=("Consolas", 12),
+            bg="#06101a",
+            fg="#ffffff",
+            insertbackground="#ffffff",
+            relief="flat",
+            bd=0,
+            highlightthickness=0,
+        )
+        self.path_entry.pack(
+            side="left", fill="both", expand=True, padx=(14, 10), pady=10
+        )
 
         # BROWSE
         self.browse_btn = tk.Label(
-            self.loc_row, text="BROWSE",
+            self.loc_row,
+            text="BROWSE",
             font=("Arial", 10, "bold"),
-            bg="#1a3a5c", fg="#ffffff",
-            cursor="hand2", padx=18, pady=6)
+            bg="#1a3a5c",
+            fg="#ffffff",
+            cursor="hand2",
+            padx=18,
+            pady=6,
+        )
         self.browse_btn.pack(side="right", padx=8, pady=6)
         self.browse_btn.bind("<Button-1>", lambda _: self._browse())
+        self.browse_btn.bind(
+            "<Enter>", lambda _: self.browse_btn.configure(bg=self._theme["accent"])
+        )
+        self.browse_btn.bind(
+            "<Leave>", lambda _: self.browse_btn.configure(bg=self._theme["accent2"])
+        )
 
         # LAUNCH GAME
-        self.launch_btn = ImageButton(self, command=self._launch_game,
-                                      fallback_text="LAUNCH GAME", bg=t["panel_bg"])
+        self.launch_btn = ImageButton(
+            self,
+            command=self._launch_game,
+            fallback_text="LAUNCH GAME",
+            bg=t["panel_bg"],
+        )
         self.launch_btn.set_paths(
             os.path.join(self._res, "buttons", "actionBtn_launch.png"),
-            os.path.join(self._res, "buttons", "actionBtn_launch_sel.png"))
+            os.path.join(self._res, "buttons", "actionBtn_launch_sel.png"),
+        )
 
         # INSTALL
-        self.install_btn = ImageButton(self, command=self._start_install,
-                                       fallback_text="Install", bg=t["panel_bg"])
+        self.install_btn = ImageButton(
+            self, command=self._start_install, fallback_text="Install", bg=t["panel_bg"]
+        )
         self.install_btn.set_paths(
             os.path.join(self._res, "buttons", "actionBtn_install.png"),
-            os.path.join(self._res, "buttons", "actionBtn_install_sel.png"))
+            os.path.join(self._res, "buttons", "actionBtn_install_sel.png"),
+        )
 
         # UPDATE
-        self.update_btn = ImageButton(self, command=self._start_install,
-                                      fallback_text="Update", bg=t["panel_bg"])
+        self.update_btn = ImageButton(
+            self, command=self._start_install, fallback_text="Update", bg=t["panel_bg"]
+        )
         self.update_btn.set_paths(
             os.path.join(self._res, "buttons", "actionBtn_update.png"),
-            os.path.join(self._res, "buttons", "actionBtn_update_sel.png"))
+            os.path.join(self._res, "buttons", "actionBtn_update_sel.png"),
+        )
 
         # BACK TO MAIN MENU
-        self.back_btn = ImageButton(self, command=self._show_main_screen,
-                                    fallback_text="Back to main menu", bg=t["panel_bg"])
+        self.back_btn = ImageButton(
+            self,
+            command=self._show_main_screen,
+            fallback_text="Back to main menu",
+            bg=t["panel_bg"],
+        )
         self.back_btn.set_paths(
             os.path.join(self._res, "buttons", "actionBtn_back.png"),
-            os.path.join(self._res, "buttons", "actionBtn_back_sel.png"))
+            os.path.join(self._res, "buttons", "actionBtn_back_sel.png"),
+        )
 
         # TRY AGAIN
-        self.retry_btn = ImageButton(self, command=self._retry_install,
-                                     fallback_text="TRY AGAIN", bg=t["panel_bg"])
+        self.retry_btn = ImageButton(
+            self,
+            command=self._retry_install,
+            fallback_text="TRY AGAIN",
+            bg=t["panel_bg"],
+        )
         self.retry_btn.set_paths(
             os.path.join(self._res, "buttons", "actionBtn_retry.png"),
-            os.path.join(self._res, "buttons", "actionBtn_retry_sel.png"))
+            os.path.join(self._res, "buttons", "actionBtn_retry_sel.png"),
+        )
 
         # Status label (hidden until install)
         self.status_label = tk.Label(
-            self, text="Installing the game...  This may take a few minutes.",
+            self,
+            text="Installing the game...  This may take a few minutes.",
             font=("Georgia", 32),
-            fg="#d7f4ff", bg=t["panel_bg"],
-            wraplength=640, justify="center")
+            fg="#d7f4ff",
+            bg=t["panel_bg"],
+            wraplength=640,
+            justify="center",
+        )
 
         # Log (hidden until install)
         self.log_box = scrolledtext.ScrolledText(
-            self, font=FONT_LOG,
-            bg=t["log_bg"], fg=t["log_fg"],
+            self,
+            font=FONT_LOG,
+            bg=t["log_bg"],
+            fg=t["log_fg"],
             insertbackground=t["log_fg"],
-            relief="flat", bd=0,
+            relief="flat",
+            bd=0,
             highlightthickness=2,
             highlightbackground=t["accent2"],
-            wrap="word", state="disabled")
+            wrap="word",
+            state="disabled",
+        )
 
         # OPEN FOLDER
-        self.open_folder_btn = ImageButton(self, command=self._open_install_folder,
-                                           fallback_text="OPEN THE GAME'S FOLDER", bg=t["panel_bg"])
+        self.open_folder_btn = ImageButton(
+            self,
+            command=self._open_install_folder,
+            fallback_text="OPEN THE GAME'S FOLDER",
+            bg=t["panel_bg"],
+        )
         self.open_folder_btn.set_paths(
             os.path.join(self._res, "buttons", "actionBtn_open_folder.png"),
-            os.path.join(self._res, "buttons", "actionBtn_open_folder_sel.png"))
+            os.path.join(self._res, "buttons", "actionBtn_open_folder_sel.png"),
+        )
 
         # Social links bar
         self._build_social_bar()
 
     def _build_social_bar(self):
-        self.social_bar = tk.Frame(self, bg="#000000", bd=0)
-        self.social_bar.place(relx=0, rely=1.0, relwidth=1.0, anchor="sw", height=SOCIAL_BAR_H)
+        t = self._theme
+        self.social_bar = tk.Frame(self, bg=t["footer_bg"], bd=0)
+        self.social_bar.place(
+            relx=0, rely=1.0, relwidth=1.0, anchor="sw", height=SOCIAL_BAR_H
+        )
 
-        sep = tk.Frame(self.social_bar, bg="#222222", height=1)
-        sep.pack(side="top", fill="x")
+        self.social_sep = tk.Frame(self.social_bar, bg=t["footer_border"], height=2)
+        self.social_sep.pack(side="top", fill="x")
 
-        inner = tk.Frame(self.social_bar, bg="#000000")
-        inner.pack(side="top", fill="both", expand=True)
+        self.social_inner = tk.Frame(self.social_bar, bg=t["footer_bg"])
+        self.social_inner.pack(side="top", fill="both", expand=True)
+
+        # Keep the collection content-sized so the complete row is centered,
+        # regardless of window width or the number of remote links.
+        self.social_button_group = tk.Frame(self.social_inner, bg=t["footer_bg"])
+        self.social_button_group.place(relx=0.5, rely=0.5, anchor="center")
 
         self._social_btns = []
 
@@ -396,17 +557,23 @@ class InstallerApp(tk.Tk):
             def build():
                 for item in links:
                     btn = SocialButton(
-                        inner,
+                        self.social_button_group,
                         icon_url=item.get("icon_url", ""),
                         label=item["label"],
                         url=item["url"],
-                        bg="#000000",
+                        bg=self._theme["footer_bg"],
                     )
-                    btn.pack(side="left", padx=2, pady=4)
-                    btn.set_accent(self._theme["accent"])
+                    btn.pack(side="left", padx=4, pady=5)
+                    btn.set_theme(
+                        self._theme["footer_bg"],
+                        self._theme["footer_text"],
+                        self._theme["accent"],
+                        self._theme["footer_hover"],
+                    )
                     self._social_btns.append(btn)
 
             self.after(0, build)
+
         threading.Thread(target=load_buttons, daemon=True).start()
 
     # ── Theme ─────────────────────────────────────────────────────────────────
@@ -414,20 +581,39 @@ class InstallerApp(tk.Tk):
     def _apply_theme(self, name: str):
         t = THEMES[name]
         self._theme_name = name
-        self._theme      = t
+        self._theme = t
 
         self._load_bg(name)
         self._load_logo(name)
         self.btn_kanto.refresh(t["panel_bg"], name == "kanto")
         self.btn_hoenn.refresh(t["panel_bg"], name == "hoenn")
 
-        self.loc_row.configure(highlightbackground=t["accent2"])
-        self.path_entry.configure(fg=t["text"], insertbackground=t["accent"])
-        self.browse_btn.configure(activebackground=t["accent"])
-        self.browse_btn.configure(fg="#ffffff")
-        self.log_box.configure(bg=t["log_bg"], fg=t["log_fg"],
-                               insertbackground=t["log_fg"],
-                               highlightbackground=t["accent2"])
+        self.loc_row.configure(bg=t["surface"], highlightbackground=t["accent2"])
+        self.path_entry.configure(
+            bg=t["field_bg"], fg=t["text"], insertbackground=t["accent"]
+        )
+        self.browse_btn.configure(
+            bg=t["accent2"], activebackground=t["accent"], fg="#ffffff"
+        )
+        self.social_bar.configure(bg=t["footer_bg"])
+        self.social_sep.configure(bg=t["footer_border"])
+        self.social_inner.configure(bg=t["footer_bg"])
+        self.social_button_group.configure(bg=t["footer_bg"])
+        self.log_box.configure(
+            bg=t["log_bg"],
+            fg=t["log_fg"],
+            insertbackground=t["log_fg"],
+            highlightbackground=t["accent2"],
+        )
+        for button in (
+            self.install_btn,
+            self.launch_btn,
+            self.open_folder_btn,
+            self.update_btn,
+            self.back_btn,
+            self.retry_btn,
+        ):
+            button.set_tint(t["accent"])
         self.install_btn.refresh(t["panel_bg"], selected=False)
         self.launch_btn.refresh(t["panel_bg"], selected=False)
         self.open_folder_btn.refresh(t["panel_bg"], selected=False)
@@ -436,10 +622,10 @@ class InstallerApp(tk.Tk):
         self.back_btn.refresh(t["panel_bg"], selected=False)
         self.retry_btn.refresh(t["panel_bg"], selected=False)
 
-
-        # Update accent color on social buttons so hover matches theme
         for btn in getattr(self, "_social_btns", []):
-            btn.set_accent(t["accent"])
+            btn.set_theme(
+                t["footer_bg"], t["footer_text"], t["accent"], t["footer_hover"]
+            )
 
     def _get_time_suffix(self):
         """Return day/eve/night based on current hour."""
@@ -469,12 +655,7 @@ class InstallerApp(tk.Tk):
             img = pil_load_exact(full_path, w, h)
             if img:
                 self._bg_ref = img
-                self.canvas_bg.create_image(
-                    0, 0,
-                    anchor="nw",
-                    image=img,
-                    tags="bg"
-                )
+                self.canvas_bg.create_image(0, 0, anchor="nw", image=img, tags="bg")
                 self.canvas_bg.tag_lower("bg")
                 return
         self._bg_ref = None
@@ -482,7 +663,6 @@ class InstallerApp(tk.Tk):
 
     def _load_logo(self, name: str):
         self.canvas_bg.delete("logo")
-        main, sub = TITLES.get(name, ("POKÉMON INFINITE FUSION", ""))
         w = max(self.winfo_width(), 720)
         cx = w // 2
         t = self._theme
@@ -491,14 +671,27 @@ class InstallerApp(tk.Tk):
             for dx in (-size, 0, size):
                 for dy in (-size, 0, size):
                     if dx or dy:
-                        self.canvas_bg.create_text(x + dx, y + dy, text=text,
-                                                   font=font, fill="#000000",
-                                                   anchor="n", tags="logo")
-            self.canvas_bg.create_text(x, y, text=text, font=font, fill=fill,
-                                       anchor="n", tags="logo")
+                        self.canvas_bg.create_text(
+                            x + dx,
+                            y + dy,
+                            text=text,
+                            font=font,
+                            fill="#000000",
+                            anchor="n",
+                            tags="logo",
+                        )
+            self.canvas_bg.create_text(
+                x, y, text=text, font=font, fill=fill, anchor="n", tags="logo"
+            )
 
-        outlined(cx, 18, main, ("Arial", 36, "bold"), "#ffffff")
-        outlined(cx, 62, sub, ("Impact", 48, "bold"), t["accent"], size=4)
+        outlined(
+            cx,
+            90,
+            EDITION_LABELS.get(name, ""),
+            ("Arial", 24, "bold"),
+            t["accent"],
+            size=2,
+        )
 
         if not self._log_visible:
             outlined(cx, 364, "Install location: ", ("Arial", 16, "bold"), "#d7f4ff")
@@ -507,6 +700,7 @@ class InstallerApp(tk.Tk):
 
     def _show_persistent_buttons(self):
         from installer import GAMES, is_existing_folder
+
         game = GAMES[self._theme_name]
         path = self._resolve_install_path(self.path_var.get().strip())
         if is_existing_folder(path, game):
@@ -524,13 +718,16 @@ class InstallerApp(tk.Tk):
     def _select_game(self, game: str):
         self._apply_theme(game)
         cfg = load_config()
-        self.path_var.set(cfg.get(f"last_install_path_{game}", str(DEFAULT_PATH.expanduser())))
+        self.path_var.set(
+            cfg.get(f"last_install_path_{game}", str(DEFAULT_PATH.expanduser()))
+        )
         self._show_persistent_buttons()
         self._refresh_install_btn()
 
     def _browse(self):
-        folder = filedialog.askdirectory(title="Select install folder",
-                                         initialdir=self.path_var.get())
+        folder = filedialog.askdirectory(
+            title="Select install folder", initialdir=self.path_var.get()
+        )
         if folder:
             self.path_var.set(folder)
             self._log(f"Install path set to: {folder}")
@@ -560,6 +757,7 @@ class InstallerApp(tk.Tk):
             self._log(f"Folder does not exist: {resolved_path}")
             return
         import sys
+
         path_str = str(resolved_path)
         if sys.platform == "win32":
             os.startfile(path_str)
@@ -570,10 +768,12 @@ class InstallerApp(tk.Tk):
 
     def _game_folder_name(self) -> str:
         from installer import GAMES
+
         return GAMES[self._theme_name]["folder"]
 
     def _resolve_install_path(self, base: str) -> Path:
         from pathlib import Path
+
         path = Path(base)
         if path.name != self._game_folder_name():
             path = path / self._game_folder_name()
@@ -581,18 +781,65 @@ class InstallerApp(tk.Tk):
 
     def _launch_game(self):
         from installer import GAMES
+
         exe_name = GAMES[self._theme_name].get("exe", "Game.exe")
         exe_path = self._resolve_install_path(self.path_var.get().strip()) / exe_name
         if not exe_path.is_file():
             self._log(f"Could not find {exe_name} in the game folder.")
             return
-        import sys
         if sys.platform == "win32":
             os.startfile(exe_path)
         elif sys.platform == "darwin":
-            subprocess.Popen(["open", str(exe_path)])
+            self._launch_game_macos(exe_path)
         else:
             subprocess.Popen([str(exe_path)])
+
+    def _launch_game_macos(self, exe_path: Path):
+        """Prepare/download Wine off the Tk thread, then launch the game."""
+        for widget in (
+            self.btn_kanto,
+            self.btn_hoenn,
+            self.loc_row,
+            self.install_btn,
+            self.launch_btn,
+            self.open_folder_btn,
+            self.update_btn,
+        ):
+            widget.place_forget()
+        self.social_bar.place_forget()
+        self._load_logo(self._theme_name)
+        self._show_log_panel()
+        self._draw_status_text("Preparing the macOS game environment…")
+        self._log("Checking the Wine runtime...")
+
+        def log_fn(message, replace_last=False):
+            self.after(0, lambda: self._log(message, replace_last))
+
+        def worker():
+            try:
+                from wine_runtime import launch_game
+
+                launch_game(exe_path, self._theme_name, log_fn)
+            except Exception as exc:
+                error = str(exc)
+
+                def failed():
+                    message = f"Could not launch the game: {error}"
+                    self._log(message)
+                    self._draw_status_text(message)
+                    self.back_btn.place(relx=0.5, rely=0.88, anchor="n")
+
+                self.after(0, failed)
+                return
+
+            def finished():
+                message = "Game launched successfully."
+                self._draw_status_text(message)
+                self.back_btn.place(relx=0.5, rely=0.88, anchor="n")
+
+            self.after(0, finished)
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _show_main_screen(self):
         self._log_visible = False
@@ -606,7 +853,9 @@ class InstallerApp(tk.Tk):
         self.btn_kanto.place(relx=0.5, rely=0.44, anchor="center", x=-150, y=-60)
         self.btn_hoenn.place(relx=0.5, rely=0.44, anchor="center", x=150, y=-60)
         self.loc_row.place(relx=0.05, rely=0.58, relwidth=0.90, anchor="w", height=48)
-        self.social_bar.place(relx=0, rely=1.0, relwidth=1.0, anchor="sw", height=SOCIAL_BAR_H)
+        self.social_bar.place(
+            relx=0, rely=1.0, relwidth=1.0, anchor="sw", height=SOCIAL_BAR_H
+        )
         self._load_logo(self._theme_name)
         self._show_persistent_buttons()
         self._apply_theme(self._theme_name)
@@ -619,10 +868,7 @@ class InstallerApp(tk.Tk):
         for btn in self._social_btns:
             btn._on_leave(None)
 
-        self.browse_btn.configure(
-            bg="#1a3a5c",
-            fg="#ffffff"
-        )
+        self.browse_btn.configure(bg="#1a3a5c", fg="#ffffff")
 
     def _start_install(self):
         path = self.path_var.get().strip()
@@ -634,14 +880,27 @@ class InstallerApp(tk.Tk):
         self._install_path = path
 
         # Hide picker UI and social bar, show full-height log
-        for w in (self.btn_kanto, self.btn_hoenn, self.loc_row,
-                  self.install_btn, self.launch_btn, self.open_folder_btn, self.update_btn):
+        for w in (
+            self.btn_kanto,
+            self.btn_hoenn,
+            self.loc_row,
+            self.install_btn,
+            self.launch_btn,
+            self.open_folder_btn,
+            self.update_btn,
+        ):
             w.place_forget()
         self.social_bar.place_forget()
         self._load_logo(self._theme_name)
         self._show_log_panel()
 
-        save_config({f"last_install_path_{self._theme_name}": str(self._resolve_install_path(path))})
+        save_config(
+            {
+                f"last_install_path_{self._theme_name}": str(
+                    self._resolve_install_path(path)
+                )
+            }
+        )
 
         self._log(f"Starting install to: {path}")
 
@@ -655,7 +914,9 @@ class InstallerApp(tk.Tk):
                 if success:
                     folder = self._game_folder_name()
                     self._install_path = (
-                        os.path.join(path, folder) if os.path.basename(path) != folder else path
+                        os.path.join(path, folder)
+                        if os.path.basename(path) != folder
+                        else path
                     )
                     self.back_btn.place(relx=0.5, rely=0.88, anchor="n")
                 else:
@@ -666,11 +927,14 @@ class InstallerApp(tk.Tk):
                     self.update_btn.place_forget()
                     self.retry_btn.place(relx=0.5, rely=0.80, anchor="n")
                     self.back_btn.place(relx=0.5, rely=0.88, anchor="n")
+
             self.after(0, finish)
 
-        threading.Thread(target=run_install,
-                         args=(self._theme_name, path, log_fn, done_fn),
-                         daemon=True).start()
+        threading.Thread(
+            target=run_install,
+            args=(self._theme_name, path, log_fn, done_fn),
+            daemon=True,
+        ).start()
 
     def _retry_install(self):
         """Re-run the install using the current path, without returning to main screen."""
@@ -688,7 +952,9 @@ class InstallerApp(tk.Tk):
         self._log_visible = True
         self.geometry("800x580")
         self.minsize(900, 720)
-        self._draw_status_text("Installing…  This will probably take a few minutes.\nPlease be patient.")
+        self._draw_status_text(
+            "Installing…  This will probably take a few minutes.\nPlease be patient."
+        )
         self.log_box.place(relx=0.04, rely=0.36, relwidth=0.92, anchor="nw", height=300)
 
     def _draw_status_text(self, text: str):
@@ -702,7 +968,6 @@ class InstallerApp(tk.Tk):
                 (size, 0),
                 (0, -size),
                 (0, size),
-
                 (-size + 1, -size + 1),
                 (size - 1, -size + 1),
                 (-size + 1, size - 1),
@@ -718,7 +983,7 @@ class InstallerApp(tk.Tk):
                     fill="#000000",
                     anchor="n",
                     tags="status",
-                    justify="center"
+                    justify="center",
                 )
 
             self.canvas_bg.create_text(
@@ -729,8 +994,9 @@ class InstallerApp(tk.Tk):
                 fill=fill,
                 anchor="n",
                 tags="status",
-                justify="center"
+                justify="center",
             )
+
         outlined(w // 2, 136, text, ("Georgia", 24), "#ffffff")
 
     def _clear_status_text(self):
