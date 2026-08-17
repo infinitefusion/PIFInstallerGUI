@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: Tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python -m unittest discover -s tests -v
+
+  macos-build:
+    name: Build macOS application
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python -m pip install --disable-pip-version-check pyinstaller pillow
+      - run: python build.py
+      - name: Validate application bundle
+        run: |
+          test -d dist/PokemonInfiniteFusion-Launcher.app
+          find dist/PokemonInfiniteFusion-Launcher.app -name THIRD_PARTY_NOTICES.md -type f | grep -q .
+          codesign --verify --deep --strict dist/PokemonInfiniteFusion-Launcher.app

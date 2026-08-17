@@ -1,4 +1,8 @@
 import hashlib
+import io
+import os
+import stat
+import tarfile
 import tempfile
 import unittest
 from pathlib import Path
@@ -65,6 +69,126 @@ class WineRuntimeTests(unittest.TestCase):
             archive = Path(temp) / "wine.tar.xz"
             archive.write_bytes(payload)
             wine_runtime._verify_archive(archive)
+
+    @unittest.skipIf(os.name == "nt", "managed Wine archives are macOS-only")
+    def test_safe_extract_preserves_internal_app_symlinks(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            archive = root / "wine.tar.xz"
+            destination = root / "runtime"
+            payload = b"runtime"
+
+            with tarfile.open(archive, "w:xz") as bundle:
+                regular = tarfile.TarInfo(
+                    "Wine Stable.app/Contents/Versions/A/runtime.txt"
+                )
+                regular.size = len(payload)
+                regular.mode = 0o755
+                bundle.addfile(regular, io.BytesIO(payload))
+
+                link = tarfile.TarInfo("Wine Stable.app/Contents/Versions/Current")
+                link.type = tarfile.SYMTYPE
+                link.linkname = "A"
+                bundle.addfile(link)
+
+            wine_runtime._extract_archive(archive, destination)
+
+            extracted = (
+                destination
+                / "Wine Stable.app"
+                / "Contents"
+                / "Versions"
+                / "A"
+                / "runtime.txt"
+            )
+            current = extracted.parent.parent / "Current"
+            self.assertEqual(extracted.read_bytes(), payload)
+            self.assertTrue(current.is_symlink())
+            self.assertEqual(os.readlink(current), "A")
+
+    def test_safe_extract_rejects_parent_traversal(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            archive = root / "wine.tar.xz"
+            destination = root / "runtime"
+            escaped = root / "escaped.txt"
+
+            with tarfile.open(archive, "w:xz") as bundle:
+                member = tarfile.TarInfo("../escaped.txt")
+                member.size = 4
+                bundle.addfile(member, io.BytesIO(b"nope"))
+
+            with self.assertRaisesRegex(wine_runtime.WineRuntimeError, "Unsafe path"):
+                wine_runtime._extract_archive(archive, destination)
+            self.assertFalse(escaped.exists())
+
+    def test_safe_extract_rejects_escaping_symlink(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            archive = root / "wine.tar.xz"
+            destination = root / "runtime"
+
+            with tarfile.open(archive, "w:xz") as bundle:
+                link = tarfile.TarInfo("Wine Stable.app/Contents/escape")
+                link.type = tarfile.SYMTYPE
+                link.linkname = "../../../outside"
+                bundle.addfile(link)
+
+            with self.assertRaisesRegex(wine_runtime.WineRuntimeError, "Unsafe link"):
+                wine_runtime._extract_archive(archive, destination)
+
+    def test_partial_download_is_removed(self):
+        class Response(io.BytesIO):
+            headers = {"Content-Length": "12"}
+
+        with tempfile.TemporaryDirectory() as temp:
+            destination = Path(temp) / "wine.tar.xz"
+            with (
+                mock.patch.object(
+                    wine_runtime.urllib.request,
+                    "urlopen",
+                    return_value=Response(b"partial"),
+                ),
+                mock.patch.object(wine_runtime, "_require_free_space"),
+            ):
+                with self.assertRaisesRegex(
+                    wine_runtime.WineRuntimeError, "incomplete"
+                ):
+                    wine_runtime._download_archive(destination, self.log_fn)
+
+            self.assertFalse(destination.exists())
+            self.assertFalse(destination.with_name("wine.tar.xz.part").exists())
+
+    def test_download_is_atomically_published_with_private_permissions(self):
+        payload = b"complete"
+
+        class Response(io.BytesIO):
+            headers = {"Content-Length": str(len(payload))}
+
+        with tempfile.TemporaryDirectory() as temp:
+            destination = Path(temp) / "wine.tar.xz"
+            with (
+                mock.patch.object(
+                    wine_runtime.urllib.request,
+                    "urlopen",
+                    return_value=Response(payload),
+                ),
+                mock.patch.object(wine_runtime, "_require_free_space"),
+            ):
+                wine_runtime._download_archive(destination, self.log_fn)
+
+            self.assertEqual(destination.read_bytes(), payload)
+            if os.name != "nt":
+                self.assertEqual(stat.S_IMODE(destination.stat().st_mode), 0o600)
+
+    def test_free_space_check_fails_before_large_operation(self):
+        usage = mock.Mock(free=100)
+        with mock.patch.object(wine_runtime.shutil, "disk_usage", return_value=usage):
+            with self.assertRaisesRegex(
+                wine_runtime.WineRuntimeError, "Not enough free disk space"
+            ):
+                wine_runtime._require_free_space(Path("."), 101, "download")
+        self.assertEqual(usage.free, 100)
 
     def test_launch_initializes_prefix_and_uses_game_directory(self):
         selection = wine_runtime.WineSelection(

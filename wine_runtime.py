@@ -14,9 +14,11 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import time
 import urllib.request
+from contextlib import contextmanager
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Callable, Iterable
 
 from config import app_data_dir
@@ -32,6 +34,15 @@ WINE_URL = (
 WINE_SHA256 = "b50dc50ec7f41d58b115a6b685d4d1315ba3c797bd3aa0f49213f2703cb82388"
 
 LogFn = Callable[[str, bool], None]
+MIB = 1024 * 1024
+DOWNLOAD_SPACE_FALLBACK = 1024 * MIB
+DOWNLOAD_SPACE_MARGIN = 128 * MIB
+EXTRACT_SPACE_MARGIN = 256 * MIB
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - only used by the macOS code path
+    fcntl = None
 
 
 class WineRuntimeError(RuntimeError):
@@ -177,36 +188,99 @@ def _selection_from_root(root: Path, source: str) -> WineSelection | None:
     return WineSelection(binary, version or WINE_VERSION, source)
 
 
+def _require_free_space(path: Path, required: int, operation: str) -> None:
+    """Fail early with an actionable message when a large operation will not fit."""
+    free = shutil.disk_usage(path).free
+    if free < required:
+        raise WineRuntimeError(
+            f"Not enough free disk space to {operation} Wine {WINE_VERSION}. "
+            f"At least {required / MIB:.0f} MB is required, but only "
+            f"{free / MIB:.0f} MB is available."
+        )
+
+
+@contextmanager
+def _managed_install_lock(parent: Path):
+    """Serialize managed-runtime installs from multiple launcher processes."""
+    lock_path = parent / ".wine-runtime-install.lock"
+    with lock_path.open("a+b") as handle:
+        try:
+            os.chmod(lock_path, 0o600)
+        except OSError:
+            pass
+        if fcntl is not None:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if fcntl is not None:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
 def _download_archive(destination: Path, log_fn: LogFn) -> None:
-    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+    temporary = destination.with_name(f"{destination.name}.part")
+    temporary.unlink(missing_ok=True)
     request = urllib.request.Request(
         WINE_URL,
         headers={"User-Agent": "PokemonInfiniteFusion-Launcher/1.0"},
     )
+    started = time.monotonic()
     try:
-        with (
-            urllib.request.urlopen(request, timeout=60) as response,
-            destination.open("wb") as out,
-        ):
+        with urllib.request.urlopen(request, timeout=60) as response:
             total = int(response.headers.get("Content-Length", "0"))
+            required = (total or DOWNLOAD_SPACE_FALLBACK) + DOWNLOAD_SPACE_MARGIN
+            _require_free_space(destination.parent, required, "download")
+
             downloaded = 0
-            while True:
-                chunk = response.read(1024 * 1024)
-                if not chunk:
-                    break
-                out.write(chunk)
-                downloaded += len(chunk)
-                if total:
-                    percent = min(100, downloaded * 100 // total)
-                    _log(log_fn, f"Downloading Wine {WINE_VERSION}... {percent}%", True)
-                else:
-                    _log(
-                        log_fn,
-                        f"Downloading Wine {WINE_VERSION}... {downloaded // (1024 * 1024)} MB",
-                        True,
+            last_progress = -1
+            with temporary.open("xb") as out:
+                os.chmod(temporary, 0o600)
+                while True:
+                    chunk = response.read(MIB)
+                    if not chunk:
+                        break
+                    out.write(chunk)
+                    downloaded += len(chunk)
+                    progress = (
+                        min(100, downloaded * 100 // total)
+                        if total
+                        else downloaded // (5 * MIB)
                     )
+                    if progress != last_progress:
+                        last_progress = progress
+                        detail = (
+                            f"{progress}%" if total else f"{downloaded / MIB:.0f} MB"
+                        )
+                        _log(
+                            log_fn,
+                            f"Downloading Wine {WINE_VERSION}... {detail}",
+                            True,
+                        )
+                out.flush()
+                os.fsync(out.fileno())
+
+        if downloaded <= 0:
+            raise WineRuntimeError("The Wine download was empty.")
+        if total and downloaded != total:
+            raise WineRuntimeError(
+                f"The Wine download was incomplete: expected {total} bytes, "
+                f"received {downloaded}."
+            )
+        if not temporary.is_file() or not os.access(temporary, os.R_OK):
+            raise WineRuntimeError("The downloaded Wine archive is not readable.")
+
+        temporary.replace(destination)
+        elapsed = max(time.monotonic() - started, 0.001)
+        _log(
+            log_fn,
+            f"Downloaded {downloaded / MIB:.1f} MB in {elapsed:.1f} seconds.",
+        )
     except Exception as exc:
+        temporary.unlink(missing_ok=True)
         destination.unlink(missing_ok=True)
+        if isinstance(exc, WineRuntimeError):
+            raise
         raise WineRuntimeError(
             f"Could not download the managed Wine runtime: {exc}"
         ) from exc
@@ -225,13 +299,113 @@ def _verify_archive(archive: Path) -> None:
         )
 
 
+def _resolved_inside(root: Path, candidate: Path) -> bool:
+    try:
+        candidate.resolve(strict=False).relative_to(root.resolve(strict=False))
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def _validate_archive_member(member: tarfile.TarInfo, destination: Path) -> None:
+    """Reject archive entries that could write outside the staging directory."""
+    member_path = PurePosixPath(member.name)
+    if member_path.is_absolute() or ".." in member_path.parts:
+        raise WineRuntimeError(f"Unsafe path in Wine archive: {member.name!r}")
+
+    output_path = destination.joinpath(*member_path.parts)
+    if not _resolved_inside(destination, output_path):
+        raise WineRuntimeError(f"Unsafe path in Wine archive: {member.name!r}")
+
+    if member.issym() or member.islnk():
+        link_path = PurePosixPath(member.linkname)
+        if link_path.is_absolute():
+            raise WineRuntimeError(
+                f"Unsafe link in Wine archive: {member.name!r} -> {member.linkname!r}"
+            )
+        link_base = output_path.parent if member.issym() else destination
+        link_target = link_base.joinpath(*link_path.parts)
+        if not _resolved_inside(destination, link_target):
+            raise WineRuntimeError(
+                f"Unsafe link in Wine archive: {member.name!r} -> {member.linkname!r}"
+            )
+
+    if not (member.isfile() or member.isdir() or member.issym() or member.islnk()):
+        raise WineRuntimeError(
+            f"Unsupported special file in Wine archive: {member.name!r}"
+        )
+
+
 def _extract_archive(archive: Path, destination: Path) -> None:
-    destination.mkdir(parents=True, exist_ok=True)
+    destination.mkdir(parents=True, mode=0o700, exist_ok=True)
     try:
         with tarfile.open(archive, "r:xz") as bundle:
-            # Python's data filter rejects absolute paths and links escaping the
-            # destination while preserving the symlinks used by macOS bundles.
-            bundle.extractall(destination, filter="data")
+            members = bundle.getmembers()
+            names: set[str] = set()
+            for member in members:
+                _validate_archive_member(member, destination)
+                normalized_name = str(PurePosixPath(member.name))
+                if normalized_name in names:
+                    raise WineRuntimeError(
+                        f"Duplicate path in Wine archive: {member.name!r}"
+                    )
+                names.add(normalized_name)
+
+            extracted_size = sum(member.size for member in members if member.isfile())
+            _require_free_space(
+                destination, extracted_size + EXTRACT_SPACE_MARGIN, "extract"
+            )
+
+            directories: list[tuple[Path, tarfile.TarInfo]] = []
+            for member in members:
+                # Validate again immediately before each write so a previously
+                # extracted symlink cannot redirect a later archive member.
+                _validate_archive_member(member, destination)
+                relative = PurePosixPath(member.name)
+                output = destination.joinpath(*relative.parts)
+
+                if member.isdir():
+                    output.mkdir(parents=True, exist_ok=True)
+                    directories.append((output, member))
+                    continue
+
+                output.parent.mkdir(parents=True, exist_ok=True)
+                if output.exists() or output.is_symlink():
+                    raise WineRuntimeError(
+                        f"Archive entry would overwrite another path: {member.name!r}"
+                    )
+
+                if member.issym():
+                    os.symlink(member.linkname, output)
+                    continue
+
+                source = bundle.extractfile(member)
+                if source is None:
+                    raise WineRuntimeError(
+                        f"Could not read file from Wine archive: {member.name!r}"
+                    )
+                with source, output.open("xb") as target:
+                    shutil.copyfileobj(source, target, length=MIB)
+                    target.flush()
+                    os.fsync(target.fileno())
+                os.chmod(output, member.mode & 0o777)
+                os.utime(
+                    output,
+                    (member.mtime, member.mtime),
+                    follow_symlinks=False,
+                )
+
+            # Apply directory metadata after their contents have been written;
+            # read-only directory modes would otherwise block extraction.
+            for directory, member in reversed(directories):
+                os.chmod(directory, member.mode & 0o777)
+                os.utime(
+                    directory,
+                    (member.mtime, member.mtime),
+                    follow_symlinks=False,
+                )
+    except WineRuntimeError:
+        raise
     except (OSError, tarfile.TarError) as exc:
         raise WineRuntimeError(
             f"Could not extract the managed Wine runtime: {exc}"
@@ -247,42 +421,58 @@ def install_managed_wine(log_fn: LogFn) -> WineSelection:
     parent = root.parent
     archive = parent / WINE_ARCHIVE
     staging = parent / f".{root.name}.installing"
-    parent.mkdir(parents=True, exist_ok=True)
+    parent.mkdir(parents=True, mode=0o700, exist_ok=True)
 
-    if staging.exists():
-        shutil.rmtree(staging)
-    archive.unlink(missing_ok=True)
+    with _managed_install_lock(parent):
+        # Another launcher may have completed the install while this process
+        # waited for the exclusive lock.
+        existing = _selection_from_root(root, "managed Wine")
+        if existing:
+            return existing
 
-    _log(
-        log_fn,
-        f"No compatible Wine installation found; preparing Wine {WINE_VERSION}...",
-    )
-    try:
-        _download_archive(archive, log_fn)
-        _log(log_fn, "Verifying Wine download...")
-        _verify_archive(archive)
-        _log(log_fn, "Installing the managed Wine runtime...")
-        _extract_archive(archive, staging)
-
-        selection = _selection_from_root(staging, "managed Wine")
-        if not selection:
-            raise WineRuntimeError(
-                "Wine was extracted, but its executable was not found or had the wrong version."
-            )
-
-        if root.exists():
-            shutil.rmtree(root)
-        staging.rename(root)
-        installed = _selection_from_root(root, "managed Wine")
-        if not installed:
-            raise WineRuntimeError(
-                "The managed Wine runtime could not be activated after extraction."
-            )
-        return installed
-    finally:
-        archive.unlink(missing_ok=True)
         if staging.exists():
             shutil.rmtree(staging)
+        archive.unlink(missing_ok=True)
+
+        _log(
+            log_fn,
+            f"No compatible Wine installation found; preparing Wine {WINE_VERSION}...",
+        )
+        try:
+            _download_archive(archive, log_fn)
+            if (
+                not archive.is_file()
+                or archive.stat().st_size <= 0
+                or not os.access(archive, os.R_OK)
+            ):
+                raise WineRuntimeError(
+                    "The managed Wine archive is missing or unreadable after download."
+                )
+            _log(log_fn, "Verifying Wine download...")
+            _verify_archive(archive)
+            _log(log_fn, "Installing the managed Wine runtime...")
+            _extract_archive(archive, staging)
+
+            selection = _selection_from_root(staging, "managed Wine")
+            if not selection:
+                raise WineRuntimeError(
+                    "Wine was extracted, but its executable was not found or had the wrong version."
+                )
+
+            if root.exists():
+                shutil.rmtree(root)
+            staging.rename(root)
+            installed = _selection_from_root(root, "managed Wine")
+            if not installed:
+                raise WineRuntimeError(
+                    "The managed Wine runtime could not be activated after extraction."
+                )
+            return installed
+        finally:
+            archive.unlink(missing_ok=True)
+            archive.with_name(f"{archive.name}.part").unlink(missing_ok=True)
+            if staging.exists():
+                shutil.rmtree(staging)
 
 
 def select_wine(log_fn: LogFn) -> WineSelection:

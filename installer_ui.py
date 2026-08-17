@@ -1,13 +1,15 @@
 import ssl
 import tkinter as tk
+import io
+import urllib.request
+from collections import OrderedDict
 from pathlib import Path
-from tkinter import filedialog, scrolledtext
+from tkinter import filedialog, messagebox, scrolledtext
 import os
 import subprocess
 import sys
 import threading
 import webbrowser
-import json
 
 from config import load_config, save_config
 from installer import run_install
@@ -64,9 +66,6 @@ EDITION_LABELS = {
     "hoenn": "POKÉMON INFINITE FUSION HOENN",
 }
 
-import urllib.request
-import io
-
 POWER_CLEAR_AVAILABLE = False  # Todo
 
 ICON_SIZE = 24  # px — icons are resized to this square
@@ -79,6 +78,7 @@ FONT_LOG = ("Consolas", 9)  # keep monospace for logs
 FONT_LABEL = (_PC, 8, "bold")
 FONT_SOCIAL = ("Arial", 10, "bold")
 BTN_W, BTN_H = 256, 199
+IMAGE_RENDER_CACHE_SIZE = 8
 
 
 # ── PIL helpers ───────────────────────────────────────────────────────────────
@@ -130,8 +130,6 @@ def pil_load_icon_url(url: str, size: int, bg_color: str = "#000000"):
         return None
     try:
         ctx = ssl.create_default_context()
-        ctx.check_hostname = False
-        ctx.verify_mode = ssl.CERT_NONE
         req = urllib.request.Request(
             url,
             headers={
@@ -172,7 +170,7 @@ class ImageButton(tk.Canvas):
         self._selected = False  # ← track state
         self._bg_color = "#000000"  # ← remember bg for re-render
         self._tint = None
-        self._render_cache = {}
+        self._render_cache = OrderedDict()
 
         self.bind(
             "<Button-1>",
@@ -204,11 +202,14 @@ class ImageButton(tk.Canvas):
             cache_key = (path, self._bg_color, self._tint)
             cached = self._render_cache.get(cache_key)
             if cached:
+                self._render_cache.move_to_end(cache_key)
                 img, w, h = cached
             else:
                 img, w, h = pil_load_native(path, self._bg_color, self._tint)
                 if img:
                     self._render_cache[cache_key] = (img, w, h)
+                    while len(self._render_cache) > IMAGE_RENDER_CACHE_SIZE:
+                        self._render_cache.popitem(last=False)
             if img:
                 self._img_ref = img
                 self.configure(width=w, height=h)
@@ -828,6 +829,7 @@ class InstallerApp(tk.Tk):
                     self._log(message)
                     self._draw_status_text(message)
                     self.back_btn.place(relx=0.5, rely=0.88, anchor="n")
+                    messagebox.showerror("Game launch failed", message, parent=self)
 
                 self.after(0, failed)
                 return
